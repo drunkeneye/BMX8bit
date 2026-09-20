@@ -1,0 +1,15 @@
+The Android port of Atari800 is called "Colleen". It is available on
+Google Play:
+
+https://play.google.com/store/apps/details?id=cz.pstehlik.colleen
+
+The original Android port was created by Kostas Nakos. The port is now
+developed by Petr Stehlik. The user manual for Colleen is available at:
+
+https://atari800.github.io/Atari800forAndroid.html#manual
+
+For instructions on how to build the Colleen APK yourself, see
+DOC/BUILD.android. 
+
+"Google", "Google Play" and "Android" are trademarks of Google, LLC, which is
+not affiliated in any way with this software and its developers.

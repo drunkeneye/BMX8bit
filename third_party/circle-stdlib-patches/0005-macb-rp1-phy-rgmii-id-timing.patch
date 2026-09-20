@@ -1,0 +1,96 @@
+diff --git a/libs/circle/include/circle/macb.h b/libs/circle/include/circle/macb.h
+index e573362..89504dc 100644
+--- a/libs/circle/include/circle/macb.h
++++ b/libs/circle/include/circle/macb.h
+@@ -72,6 +72,10 @@ private:
+ 	void phy_setup (void);
+ 	int phy_find (void);
+ 	int phy_read_status (void);
++	void phy_config_rgmii_id (void);
++	u16 phy_read_auxctl (u16 regnum);
++	void phy_write_auxctl (u16 regnum, u16 val);
++	u16 phy_read_shadow (u16 shadow);
+ 	void phy_write_shadow (u16 shadow, u16 val);
+ 	void phy_write_exp (u16 reg, u16 val);
+ 
+diff --git a/libs/circle/lib/macb.cpp b/libs/circle/lib/macb.cpp
+index df2513a..c1ceea7 100644
+--- a/libs/circle/lib/macb.cpp
++++ b/libs/circle/lib/macb.cpp
+@@ -868,6 +868,14 @@
+   #define LPA_1000HALF          0x0400
+ #define MII_BCM54XX_EXP_DATA    0x15 /* Expansion register data */
+ #define MII_BCM54XX_EXP_SEL     0x17 /* Expansion register select */
++#define MII_BCM54XX_AUX_CTL     0x18 /* Auxiliary control register */
++ #define MII_BCM54XX_AUXCTL_SHDWSEL_MISC             0x07
++ #define MII_BCM54XX_AUXCTL_SHDWSEL_MISC_RSVD        0x0060
++ #define MII_BCM54XX_AUXCTL_SHDWSEL_MISC_RGMII_EN    0x0080
++ #define MII_BCM54XX_AUXCTL_SHDWSEL_MISC_RGMII_SKEW_EN 0x0100
++ #define MII_BCM54XX_AUXCTL_MISC_WREN                0x8000
++ #define MII_BCM54XX_AUXCTL_SHDWSEL_READ_SHIFT       12
++ #define MII_BCM54XX_AUXCTL_SHDWSEL_MASK             0x0007
+ #define MII_BCM54XX_SHD		0x1c /* shadow registers */
+  #define MII_BCM54XX_SHD_WRITE	0x8000
+  #define MII_BCM54XX_SHD_VAL(x) ((x & 0x1f) << 10)
+@@ -893,6 +901,8 @@
+ #define BCM54XX_SHD_LEDS1           0x0d /* LED Selector 1 */
+ #define BCM54XX_SHD_LEDS1_LED3(src) ((src & 0xf) << 4)
+ #define BCM54XX_SHD_LEDS1_LED1(src) ((src & 0xf) << 0)
++#define BCM54810_SHD_CLK_CTL        0x03
++#define BCM54810_SHD_CLK_CTL_GTXCLK_EN (1 << 9)
+ 
+ #define _1000BASET		1000
+ #define _100BASET		100
+@@ -1471,6 +1481,8 @@ int CMACBDevice::phy_init (void)
+ 		return -1;
+ 	}
+ 
++	phy_config_rgmii_id ();
++
+ 	/* Activity leds */
+ 	phy_write_shadow(BCM54XX_SHD_LEDS1,
+ 			   BCM54XX_SHD_LEDS1_LED1(BCM_LED_SRC_MULTICOLOR1)
+@@ -1627,6 +1639,43 @@ int CMACBDevice::phy_read_status (void)
+ 	return changed;
+ }
+ 
++void CMACBDevice::phy_config_rgmii_id (void)
++{
++	u16 aux = phy_read_auxctl (MII_BCM54XX_AUXCTL_SHDWSEL_MISC);
++	aux |=   MII_BCM54XX_AUXCTL_MISC_WREN
++	       | MII_BCM54XX_AUXCTL_SHDWSEL_MISC_RGMII_EN
++	       | MII_BCM54XX_AUXCTL_SHDWSEL_MISC_RGMII_SKEW_EN
++	       | MII_BCM54XX_AUXCTL_SHDWSEL_MISC_RSVD;
++	phy_write_auxctl (MII_BCM54XX_AUXCTL_SHDWSEL_MISC, aux);
++
++	u16 clk = phy_read_shadow (BCM54810_SHD_CLK_CTL);
++	clk |= BCM54810_SHD_CLK_CTL_GTXCLK_EN;
++	phy_write_shadow (BCM54810_SHD_CLK_CTL, clk);
++
++	LOGDBG ("PHY RGMII-ID aux 0x%04x clk 0x%04x", aux, clk);
++}
++
++u16 CMACBDevice::phy_read_auxctl (u16 regnum)
++{
++	mdio_write (m_phy_addr, MII_BCM54XX_AUX_CTL,
++		    MII_BCM54XX_AUXCTL_SHDWSEL_MASK
++		  | (regnum << MII_BCM54XX_AUXCTL_SHDWSEL_READ_SHIFT));
++
++	return mdio_read (m_phy_addr, MII_BCM54XX_AUX_CTL);
++}
++
++void CMACBDevice::phy_write_auxctl (u16 regnum, u16 val)
++{
++	mdio_write (m_phy_addr, MII_BCM54XX_AUX_CTL, regnum | val);
++}
++
++u16 CMACBDevice::phy_read_shadow (u16 shadow)
++{
++	mdio_write (m_phy_addr, MII_BCM54XX_SHD, MII_BCM54XX_SHD_VAL (shadow));
++
++	return MII_BCM54XX_SHD_DATA (mdio_read (m_phy_addr, MII_BCM54XX_SHD));
++}
++
+ void CMACBDevice::phy_write_shadow (u16 shadow, u16 val)
+ {
+ 	mdio_write(m_phy_addr, MII_BCM54XX_SHD,   MII_BCM54XX_SHD_WRITE

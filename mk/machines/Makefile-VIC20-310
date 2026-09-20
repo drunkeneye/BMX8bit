@@ -1,0 +1,57 @@
+#
+# Makefile for a VIC20 kernel using VICE 3.10
+#
+
+MACHINE_CLASS = RASPI_VIC20
+
+include mk/machines/Makefile-310.common
+
+VICELIBS := \
+	$(VICE310_CORE_OBJS) \
+	$(VICE)/midi.o \
+	$(VICE)/tapeport/libtapeport.a \
+	$(VICE)/vic20/cart/libvic20cart.a \
+	$(VICE)/vic20/cart/libmascuerade.a \
+	$(VICE)/vic20/libvic20.a \
+	$(VICE)/c64/cart/libc64commoncart.a \
+	$(VICE)/datasette/libdatasette.a \
+	$(VICE)/drive/iec/libdriveiec.a \
+	$(VICE)/drive/iecieee/libdriveiecieee.a \
+	$(VICE)/drive/iec/c64exp/libdriveiecc64exp.a \
+	$(VICE)/drive/ieee/libdriveieee.a \
+	$(VICE)/drive/libdrive.a \
+	$(VICE)/drive/tcbm/libdrivetcbm.a \
+	$(VICE)/iecbus/libiecbus.a \
+	$(VICE)/lib/p64/libp64.a \
+	$(VICE)/parallel/libparallel.a \
+	$(VICE)/vdrive/libvdrive.a \
+	$(VICE)/sid/libsid.a \
+	$(VICE)/monitor/libmonitor.a \
+	$(VICE)/joyport/libjoyport.a \
+	$(VICE)/samplerdrv/libsamplerdrv.a \
+	$(VICE)/arch/shared/sounddrv/libsounddrv.a \
+	$(VICE)/arch/shared/mididrv/libmididrv.a \
+	$(VICE)/arch/shared/socketdrv/libsocketdrv.a \
+	$(VICE)/arch/shared/hwsiddrv/libhwsiddrv.a \
+	$(VICE)/gfxoutputdrv/libgfxoutputdrv.a \
+	$(VICE)/printerdrv/libprinterdrv.a \
+	$(VICE)/diskimage/libdiskimage.a \
+	$(VICE)/fsdevice/libfsdevice.a \
+	$(VICE)/tape/libtape.a \
+	$(VICE)/fileio/libfileio.a \
+	$(VICE)/serial/libserial.a \
+	$(VICE)/core/libcore.a \
+	$(VICE)/rs232drv/librs232drv.a \
+	$(VICE)/vic20/libvic20stubs.a \
+	$(VICE)/raster/libraster.a \
+	$(VICE)/userport/libuserport.a \
+	$(VICE)/diag/libdiag.a \
+	$(VICE)/core/rtc/librtc.a \
+	$(VICE)/video/libvideo.a \
+	$(VICE)/arch/raspi/libarch.a \
+	$(VICE)/imagecontents/libimagecontents.a \
+	$(VICE310_RESID_LIBS) \
+	$(VICE)/arch/raspi/libarch.a \
+	$(VICE)/arch/raspi/vic20/libarch_vic20.a
+
+include Makefile

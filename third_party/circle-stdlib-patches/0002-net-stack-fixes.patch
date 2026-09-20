@@ -1,0 +1,2085 @@
+diff --git a/libs/circle/include/circle/net/dhcpclient.h b/libs/circle/include/circle/net/dhcpclient.h
+index 6bbd1489..a1d36036 100644
+--- a/libs/circle/include/circle/net/dhcpclient.h
++++ b/libs/circle/include/circle/net/dhcpclient.h
+@@ -31,7 +31,9 @@ enum TDHCPStatus
+ 	DHCPStatusSuccess,
+ 	DHCPStatusConnectError,
+ 	DHCPStatusTimeout,
++	DHCPStatusLinkDown,
+ 	DHCPStatusNAK,
++	DHCPStatusNoResponse,
+ 	DHCPStatusConfigError,
+ 	DHCPStatusConfigChanged
+ };
+@@ -52,9 +54,12 @@ private:
+ 	TDHCPStatus RenewOrRebind (boolean bRenew, unsigned nTimeout);
+ 
+ 	void HaltNetwork (void);
++	boolean IsLinkReady (void) const;
++	void WaitForLink (void);
++	void FlushSocket (void);
+ 
+ 	// send DISCOVER or REQUEST and wait for reply
+-	boolean SendAndReceive (boolean bRequest, u32 nCIAddr = 0);
++	TDHCPStatus SendAndReceive (boolean bRequest, u32 nCIAddr = 0);
+ 
+ 	boolean SendDiscover (void);
+ 	boolean SendRequest (u32 nCIAddr);
+diff --git a/libs/circle/include/circle/net/linklayer.h b/libs/circle/include/circle/net/linklayer.h
+index a269416d..a34a1fe9 100644
+--- a/libs/circle/include/circle/net/linklayer.h
++++ b/libs/circle/include/circle/net/linklayer.h
+@@ -68,6 +68,7 @@ public:
+ 
+ 	// pBuffer must have size FRAME_BUFFER_SIZE
+ 	boolean ReceiveRaw (void *pBuffer, unsigned *pResultLength, CMACAddress *pSender = 0);
++	void FlushRawReceiveQueue (void);
+ 
+ 	// nProtocolType is in host byte order
+ 	boolean EnableReceiveRaw (u16 nProtocolType);
+diff --git a/libs/circle/include/circle/net/netdevlayer.h b/libs/circle/include/circle/net/netdevlayer.h
+index 466ad520..437e062a 100644
+--- a/libs/circle/include/circle/net/netdevlayer.h
++++ b/libs/circle/include/circle/net/netdevlayer.h
+@@ -43,6 +43,7 @@ public:
+ 
+ 	void Send (CNetBuffer *pNetBuffer);
+ 	CNetBuffer *Receive (void);
++	void FlushReceiveQueue (void);
+ 
+ 	boolean IsRunning (void) const;		// is net device available and link up?
+ 
+diff --git a/libs/circle/lib/net/dhcpclient.cpp b/libs/circle/lib/net/dhcpclient.cpp
+index cad21776..febfe4e3 100644
+--- a/libs/circle/lib/net/dhcpclient.cpp
++++ b/libs/circle/lib/net/dhcpclient.cpp
+@@ -102,6 +102,155 @@ PACKED;
+ 
+ static const char FromDHCPClient[] = "dhcp";
+ 
++#ifdef BMC64_WLAN_TRACE
++#define BMX_DHCP_LOG(_fmt, ...) \
++	CLogger::Get ()->Write (FromDHCPClient, LogNotice, "trace " _fmt, ##__VA_ARGS__)
++
++static const char *DHCPTraceTypeName (unsigned nType)
++{
++	switch (nType)
++	{
++	case DHCP_OPTION_MSGTYPE_DISCOVER:
++		return "DISCOVER";
++	case DHCP_OPTION_MSGTYPE_OFFER:
++		return "OFFER";
++	case DHCP_OPTION_MSGTYPE_REQUEST:
++		return "REQUEST";
++	case DHCP_OPTION_MSGTYPE_DECLINE:
++		return "DECLINE";
++	case DHCP_OPTION_MSGTYPE_ACK:
++		return "ACK";
++	case DHCP_OPTION_MSGTYPE_NAK:
++		return "NAK";
++	case DHCP_OPTION_MSGTYPE_RELEASE:
++		return "RELEASE";
++	case DHCP_OPTION_MSGTYPE_INFORM:
++		return "INFORM";
++	default:
++		return "UNKNOWN";
++	}
++}
++
++static unsigned DHCPTraceOptionU8 (const u8 *pOptions, unsigned nOptionsSize, u8 uchCode)
++{
++	assert (pOptions != 0);
++
++	for (unsigned i = 0; i < nOptionsSize;)
++	{
++		u8 uchOption = pOptions[i];
++		if (uchOption == DHCP_OPTION_END)
++		{
++			break;
++		}
++		if (uchOption == DHCP_OPTION_PAD)
++		{
++			i++;
++			continue;
++		}
++		if (i+2 > nOptionsSize)
++		{
++			break;
++		}
++
++		unsigned nLen = pOptions[i+1];
++		if (i+2+nLen > nOptionsSize)
++		{
++			break;
++		}
++
++		if (uchOption == uchCode && nLen >= 1)
++		{
++			return pOptions[i+2];
++		}
++
++		i += 2+nLen;
++	}
++
++	return 0;
++}
++
++static u32 DHCPTraceOptionU32 (const u8 *pOptions, unsigned nOptionsSize, u8 uchCode)
++{
++	assert (pOptions != 0);
++
++	for (unsigned i = 0; i < nOptionsSize;)
++	{
++		u8 uchOption = pOptions[i];
++		if (uchOption == DHCP_OPTION_END)
++		{
++			break;
++		}
++		if (uchOption == DHCP_OPTION_PAD)
++		{
++			i++;
++			continue;
++		}
++		if (i+2 > nOptionsSize)
++		{
++			break;
++		}
++
++		unsigned nLen = pOptions[i+1];
++		if (i+2+nLen > nOptionsSize)
++		{
++			break;
++		}
++
++		if (uchOption == uchCode && nLen == 4)
++		{
++			const u8 *pValue = pOptions+i+2;
++			return   (u32) pValue[0]
++			       | (u32) pValue[1] << 8
++			       | (u32) pValue[2] << 16
++			       | (u32) pValue[3] << 24;
++		}
++
++		i += 2+nLen;
++	}
++
++	return 0;
++}
++#else
++#define BMX_DHCP_LOG(_fmt, ...)
++#endif
++
++#ifdef BMC64_WLAN_LOW_IMPACT_TRACE
++enum
++{
++	BMX_DHCP_STAGE_CLIENT_TX = 0,
++	BMX_DHCP_STAGE_CLIENT_RX_RAW = 1,
++	BMX_DHCP_STAGE_CLIENT_RX_VALID = 2,
++	BMX_DHCP_STAGE_CLIENT_RX_DROP = 3
++};
++
++enum
++{
++	BMX_DHCP_REASON_NONE = 0,
++	BMX_DHCP_REASON_SHORT = 1,
++	BMX_DHCP_REASON_HEADER = 2,
++	BMX_DHCP_REASON_XID = 3,
++	BMX_DHCP_REASON_CHADDR = 4
++};
++
++extern "C" void bmx_dhcp_low_client_packet (unsigned nStage,
++					    const unsigned char *pPayload,
++					    unsigned nLength, unsigned nReason,
++					    int nResult);
++extern "C" void bmx_dhcp_low_timeout (int bRequest, unsigned nTry, unsigned nXID);
++extern "C" void bmx_dhcp_low_dump (const char *pReason);
++
++#define DHCPLowClientPacket(_stage, _payload, _length, _reason, _result) \
++	bmx_dhcp_low_client_packet ((_stage), (const unsigned char *) (_payload), \
++				    (_length), (_reason), (_result))
++#define DHCPLowTimeout(_request, _try, _xid) \
++	bmx_dhcp_low_timeout ((_request), (_try), (_xid))
++#define DHCPLowDump(_reason) bmx_dhcp_low_dump ((_reason))
++#else
++#define DHCPLowClientPacket(_stage, _payload, _length, _reason, _result)
++#define DHCPLowTimeout(_request, _try, _xid)
++#define DHCPLowDump(_reason)
++#endif
++
+ #define MAX_TRIES	4
+ const unsigned CDHCPClient::s_TimeoutHZ[MAX_TRIES] = {4*HZ, 8*HZ, 16*HZ, 32*HZ};
+ 
+@@ -139,6 +288,9 @@ void CDHCPClient::Run (void)
+ 	while (1)
+ 	{
+ 	InitState:
++		WaitForLink ();
++		FlushSocket ();
++
+ 		switch (SelectAndRequest ())
+ 		{
+ 		case DHCPStatusSuccess:
+@@ -147,12 +299,22 @@ void CDHCPClient::Run (void)
+ 		case DHCPStatusConnectError:
+ 			return;			// cannot recover
+ 
++		case DHCPStatusNoResponse:
++			CLogger::Get ()->Write (FromDHCPClient, LogNotice,
++						"No DHCP response before bound. Restarting discovery.");
++			FlushSocket ();
++			goto InitState;
++
+ 		case DHCPStatusTimeout:
+ 		case DHCPStatusNAK:
+ 		case DHCPStatusConfigError:
+ 		case DHCPStatusConfigChanged:
+ 			CScheduler::Get ()->Sleep (RESTART_DELAY);
+ 			goto InitState;
++
++		case DHCPStatusLinkDown:
++			HaltNetwork ();
++			goto InitState;
+ 		}
+ 	
+ 	BoundState:
+@@ -160,14 +322,17 @@ void CDHCPClient::Run (void)
+ 
+ 		while (CTimer::Get ()->GetUptime () - m_nBoundSince < m_nRenewalTimeValue)
+ 		{
+-			// discard messages
+-			u8 Buffer[DHCP_MAX_MESSAGE_SIZE];
+-			while (m_Socket.Receive (Buffer, sizeof Buffer, MSG_DONTWAIT) > 0)
++			if (!IsLinkReady ())
+ 			{
+-				CScheduler::Get ()->Yield ();
++				CLogger::Get ()->Write (FromDHCPClient, LogWarning,
++							"Link down while bound. Restarting DHCP.");
++				HaltNetwork ();
++				goto InitState;
+ 			}
+ 
+-			CScheduler::Get ()->Sleep (10);
++			FlushSocket ();
++
++			CScheduler::Get ()->MsSleep (250);
+ 		}
+ 
+ 	//RenewingState:
+@@ -181,6 +346,10 @@ void CDHCPClient::Run (void)
+ 
+ 		case DHCPStatusTimeout:
+ 			break;
++
++		case DHCPStatusLinkDown:
++			HaltNetwork ();
++			goto InitState;
+ 			
+ 		case DHCPStatusNAK:
+ 		case DHCPStatusConfigError:
+@@ -200,6 +369,10 @@ void CDHCPClient::Run (void)
+ 
+ 		case DHCPStatusTimeout:
+ 			break;
++
++		case DHCPStatusLinkDown:
++			HaltNetwork ();
++			goto InitState;
+ 			
+ 		case DHCPStatusNAK:
+ 		case DHCPStatusConfigError:
+@@ -244,9 +417,10 @@ TDHCPStatus CDHCPClient::SelectAndRequest (void)
+ 	m_nXID = GetXID ();		// new transaction ID
+ 
+ 	// SELECTING state
+-	if (!SendAndReceive (FALSE))
++	TDHCPStatus Status = SendAndReceive (FALSE);
++	if (Status != DHCPStatusSuccess)
+ 	{
+-		return DHCPStatusTimeout;
++		return Status;
+ 	}
+ 
+ 	m_nOwnIPAddress = m_nRxYIAddr;
+@@ -256,20 +430,23 @@ TDHCPStatus CDHCPClient::SelectAndRequest (void)
+ 	assert (m_nServerIdentifier != 0);
+ 
+ 	// REQUESTING state
+-	if (!SendAndReceive (TRUE, 0))
++	Status = SendAndReceive (TRUE, 0);
++	if (Status != DHCPStatusSuccess)
+ 	{
+-		return DHCPStatusTimeout;
++		return Status;
+ 	}
+ 
+ 	if (m_nRxMessageType == DHCP_OPTION_MSGTYPE_NAK)
+ 	{
+ 		CLogger::Get ()->Write (FromDHCPClient, LogWarning, "REQUEST rejected with NAK");
++		DHCPLowDump ("nak");
+ 
+ 		return DHCPStatusNAK;
+ 	}
+ 
+ 	if (!CheckConfig ())
+ 	{
++		DHCPLowDump ("config-error");
+ 		return DHCPStatusConfigError;
+ 	}
+ 
+@@ -306,6 +483,7 @@ TDHCPStatus CDHCPClient::SelectAndRequest (void)
+ 	m_nRebindingTimeValue = m_nRxRebindingTimeValue;
+ 
+ 	m_bIsBound = TRUE;
++	DHCPLowDump ("bound");
+ 
+ 	// TODO: send ARP reply to inform other clients
+ 
+@@ -356,12 +534,17 @@ TDHCPStatus CDHCPClient::RenewOrRebind (boolean bRenew, unsigned nTimeout)
+ 	{
+ 		m_nXID = GetXID ();		// new transaction ID
+ 
+-		if (SendAndReceive (TRUE, m_nOwnIPAddress))
++		TDHCPStatus Status = SendAndReceive (TRUE, m_nOwnIPAddress);
++		if (Status == DHCPStatusSuccess)
+ 		{
+ 			bReceiveOK = TRUE;
+ 
+ 			break;
+ 		}
++		if (Status == DHCPStatusLinkDown)
++		{
++			return Status;
++		}
+ 
+ 		unsigned nTimeElapsed = CTimer::Get ()->GetUptime () - m_nBoundSince;
+ 		if (nTimeout <= nTimeElapsed)
+@@ -435,30 +618,104 @@ void CDHCPClient::HaltNetwork (void)
+ 	m_pNetConfig->Reset ();
+ }
+ 
+-boolean CDHCPClient::SendAndReceive (boolean bRequest, u32 nCIAddr)
++boolean CDHCPClient::IsLinkReady (void) const
++{
++	assert (m_pNetSubSystem != 0);
++
++	return m_pNetSubSystem->GetNetDeviceLayer ()->IsRunning ();
++}
++
++void CDHCPClient::WaitForLink (void)
++{
++	boolean bLogged = FALSE;
++	while (!IsLinkReady ())
++	{
++		if (!bLogged)
++		{
++			CLogger::Get ()->Write (FromDHCPClient, LogNotice,
++						"Link down. Waiting for link.");
++			bLogged = TRUE;
++		}
++
++		CScheduler::Get ()->MsSleep (100);
++	}
++
++	if (bLogged)
++	{
++		CLogger::Get ()->Write (FromDHCPClient, LogNotice,
++					"Link ready. Restarting discovery.");
++	}
++}
++
++void CDHCPClient::FlushSocket (void)
++{
++	unsigned nDropped = 0;
++	u8 Buffer[DHCP_MAX_MESSAGE_SIZE];
++	while (m_Socket.Receive (Buffer, sizeof Buffer, MSG_DONTWAIT) > 0)
++	{
++		nDropped++;
++		CScheduler::Get ()->Yield ();
++	}
++
++	if (nDropped > 0)
++	{
++		BMX_DHCP_LOG ("flushed %u queued messages", nDropped);
++	}
++}
++
++TDHCPStatus CDHCPClient::SendAndReceive (boolean bRequest, u32 nCIAddr)
+ {
+ 	for (unsigned nTry = 1; nTry <= MAX_TRIES; nTry++)
+ 	{
++		if (!IsLinkReady ())
++		{
++			CLogger::Get ()->Write (FromDHCPClient, LogNotice,
++						"Link down before sending %s. Aborting transaction.",
++						bRequest ? "REQUEST" : "DISCOVER");
++
++			return DHCPStatusLinkDown;
++		}
++
++		BMX_DHCP_LOG ("send %s try %u xid=%08X timeout=%u ms",
++			      bRequest ? "REQUEST" : "DISCOVER", nTry, m_nXID,
++			      s_TimeoutHZ[nTry-1] * 1000 / HZ);
+ 		if (!(bRequest ? SendRequest (nCIAddr) : SendDiscover ()))
+ 		{
+ 			CLogger::Get ()->Write (FromDHCPClient, LogError, "Cannot send %s",
+ 						bRequest ? "REQUEST" : "DISCOVER");
+ 
+-			return FALSE;
++			return DHCPStatusTimeout;
+ 		}
+ 
+ 		unsigned nStartTicks = CTimer::Get ()->GetTicks ();	// use ticks here for precision
+ 		while (CTimer::Get ()->GetTicks () - nStartTicks < s_TimeoutHZ[nTry-1])
+ 		{
++			if (!IsLinkReady ())
++			{
++				CLogger::Get ()->Write (FromDHCPClient, LogNotice,
++							"Link down while waiting for %s. Aborting transaction.",
++							bRequest ? "ACK/NAK" : "OFFER");
++
++				return DHCPStatusLinkDown;
++			}
++
+ 			if (ReceiveMessage ())
+ 			{
++				BMX_DHCP_LOG ("rx %s(%u) while waiting for %s try %u yiaddr=%08X server=%08X",
++					      DHCPTraceTypeName (m_nRxMessageType),
++					      m_nRxMessageType,
++					      bRequest ? "ACK/NAK" : "OFFER", nTry,
++					      m_nRxYIAddr, m_nRxServerIdentifier);
+ 				if (bRequest)
+ 				{
+ 					if (   m_nRxMessageType == DHCP_OPTION_MSGTYPE_ACK
+ 					    || m_nRxMessageType == DHCP_OPTION_MSGTYPE_NAK)
+ 					{
+-						return TRUE;
++						return DHCPStatusSuccess;
+ 					}
++					BMX_DHCP_LOG ("ignore %s(%u) while waiting for ACK/NAK",
++						      DHCPTraceTypeName (m_nRxMessageType),
++						      m_nRxMessageType);
+ 				}
+ 				else
+ 				{
+@@ -467,7 +724,17 @@ boolean CDHCPClient::SendAndReceive (boolean bRequest, u32 nCIAddr)
+ 					    && CheckConfig ()
+ 					    && m_nRxServerIdentifier != 0)
+ 					{
+-						return TRUE;
++						return DHCPStatusSuccess;
++					}
++					if (m_nRxMessageType != DHCP_OPTION_MSGTYPE_OFFER)
++					{
++						BMX_DHCP_LOG ("ignore %s(%u) while waiting for OFFER",
++							      DHCPTraceTypeName (m_nRxMessageType),
++							      m_nRxMessageType);
++					}
++					else if (m_nRxServerIdentifier == 0)
++					{
++						BMX_DHCP_LOG ("ignore OFFER without server identifier");
+ 					}
+ 				}
+ 			}
+@@ -475,13 +742,15 @@ boolean CDHCPClient::SendAndReceive (boolean bRequest, u32 nCIAddr)
+ 			CScheduler::Get ()->Yield ();
+ 		}
+ 
+-		CLogger::Get ()->Write (FromDHCPClient, LogWarning, "No response from server. Retrying.");
++		BMX_DHCP_LOG ("No response from server. Retrying.");
++		DHCPLowTimeout (bRequest ? 1 : 0, nTry, m_nXID);
+ 	}
+ 
+ 	CLogger::Get ()->Write (FromDHCPClient, LogWarning, "Did not receive %s",
+ 				bRequest ? "ACK or NAK" : "OFFER");
++	DHCPLowDump (bRequest ? "no-ack" : "no-offer");
+ 
+-	return FALSE;
++	return DHCPStatusNoResponse;
+ }
+ 
+ boolean CDHCPClient::SendDiscover (void)
+@@ -610,8 +879,28 @@ boolean CDHCPClient::SendMessage (const u8 *pOptions, unsigned nOptionsSize)
+ 	assert (nOptionsSize <= DHCP_MAX_OPTIONS_SIZE);
+ 	memcpy (pMessage->Options, pOptions, nOptionsSize);
+ 
++#ifdef BMC64_WLAN_TRACE
++	unsigned nMessageType = DHCPTraceOptionU8 (pOptions, nOptionsSize, DHCP_OPTION_MSGTYPE);
++	u32 nServerIdentifier = DHCPTraceOptionU32 (pOptions, nOptionsSize, DHCP_OPTION_SERVERID);
++	u32 nRequestedIP = DHCPTraceOptionU32 (pOptions, nOptionsSize, DHCP_OPTION_REQIPADDR);
++	BMX_DHCP_LOG ("tx detail %s(%u) xid=%08X ciaddr=%08X flags=%04X server=%08X reqip=%08X optlen=%u msglen=%u chaddr=%02X:%02X:%02X:%02X:%02X:%02X",
++		      DHCPTraceTypeName (nMessageType), nMessageType, m_nXID,
++		      m_nTxCIAddr, pMessage->Flags, nServerIdentifier, nRequestedIP,
++		      nOptionsSize, (unsigned) DHCP_MAX_MESSAGE_SIZE,
++		      pMessage->CHAddr[0], pMessage->CHAddr[1], pMessage->CHAddr[2],
++		      pMessage->CHAddr[3], pMessage->CHAddr[4], pMessage->CHAddr[5]);
++#endif
++
+ 	// we always send a full sized message (with padding)
+-	return m_Socket.Send (pMessage, DHCP_MAX_MESSAGE_SIZE, 0) == DHCP_MAX_MESSAGE_SIZE;
++	int nResult = m_Socket.Send (pMessage, DHCP_MAX_MESSAGE_SIZE, 0);
++	DHCPLowClientPacket (BMX_DHCP_STAGE_CLIENT_TX, pMessage,
++			     DHCP_MAX_MESSAGE_SIZE, BMX_DHCP_REASON_NONE, nResult);
++#ifdef BMC64_WLAN_TRACE
++	BMX_DHCP_LOG ("tx result %s(%u) rc=%d expected=%u",
++		      DHCPTraceTypeName (nMessageType), nMessageType,
++		      nResult, (unsigned) DHCP_MAX_MESSAGE_SIZE);
++#endif
++	return nResult == DHCP_MAX_MESSAGE_SIZE;
+ }
+ 
+ boolean CDHCPClient::ReceiveMessage (void)
+@@ -621,10 +910,20 @@ boolean CDHCPClient::ReceiveMessage (void)
+ 	int nMessageSize = m_Socket.Receive (Buffer, sizeof Buffer, MSG_DONTWAIT);
+ 	if (nMessageSize < (int) DHCP_HEADER_SIZE)
+ 	{
++		if (nMessageSize > 0)
++		{
++			DHCPLowClientPacket (BMX_DHCP_STAGE_CLIENT_RX_DROP, Buffer,
++					     nMessageSize, BMX_DHCP_REASON_SHORT,
++					     nMessageSize);
++			BMX_DHCP_LOG ("drop short candidate size=%d header=%u",
++				      nMessageSize, (unsigned) DHCP_HEADER_SIZE);
++		}
+ 		return FALSE;
+ 	}
+ 
+ 	TDHCPMessage *pMessage = (TDHCPMessage *) Buffer;
++	DHCPLowClientPacket (BMX_DHCP_STAGE_CLIENT_RX_RAW, pMessage,
++			     nMessageSize, BMX_DHCP_REASON_NONE, nMessageSize);
+ 
+ 	// check message
+ 	if (   pMessage->OP	     != DHCP_OP_BOOTREPLY
+@@ -633,6 +932,16 @@ boolean CDHCPClient::ReceiveMessage (void)
+ 	    || pMessage->XID	     != m_nXID
+ 	    || pMessage->MagicCookie != DHCP_MAGIC_COOKIE)
+ 	{
++#ifdef BMC64_WLAN_LOW_IMPACT_TRACE
++		unsigned nReason = pMessage->XID != m_nXID
++				 ? BMX_DHCP_REASON_XID : BMX_DHCP_REASON_HEADER;
++		DHCPLowClientPacket (BMX_DHCP_STAGE_CLIENT_RX_DROP, pMessage,
++				     nMessageSize, nReason, nMessageSize);
++#endif
++		BMX_DHCP_LOG ("drop candidate op=%u htype=%u hlen=%u xid=%08X expected=%08X cookie=%08X size=%d",
++			      pMessage->OP, pMessage->HType, pMessage->HLen,
++			      pMessage->XID, m_nXID, pMessage->MagicCookie,
++			      nMessageSize);
+ 		return FALSE;
+ 	}
+ 
+@@ -643,6 +952,16 @@ boolean CDHCPClient::ReceiveMessage (void)
+ 	CMACAddress CHAddr (pMessage->CHAddr);
+ 	if (CHAddr != *pOwnMACAddress)
+ 	{
++		DHCPLowClientPacket (BMX_DHCP_STAGE_CLIENT_RX_DROP, pMessage,
++				     nMessageSize, BMX_DHCP_REASON_CHADDR,
++				     nMessageSize);
++		CString CHAddrString;
++		CString OwnMACString;
++		CHAddr.Format (&CHAddrString);
++		pOwnMACAddress->Format (&OwnMACString);
++		BMX_DHCP_LOG ("drop candidate chaddr=%s own=%s",
++			      (const char *) CHAddrString,
++			      (const char *) OwnMACString);
+ 		return FALSE;
+ 	}
+ 
+@@ -681,6 +1000,13 @@ boolean CDHCPClient::ReceiveMessage (void)
+ 		break;
+ 	}
+ 
++	BMX_DHCP_LOG ("rx candidate %s(%u) yiaddr=%08X server=%08X router=%08X dns=%08X lease=%u size=%d",
++		      DHCPTraceTypeName (m_nRxMessageType), m_nRxMessageType,
++		      m_nRxYIAddr, m_nRxServerIdentifier, m_nRxRouter,
++		      m_nRxDNSServer, m_nRxIPAddressLeaseTime, nMessageSize);
++	DHCPLowClientPacket (BMX_DHCP_STAGE_CLIENT_RX_VALID, pMessage,
++			     nMessageSize, BMX_DHCP_REASON_NONE, nMessageSize);
++
+ 	return TRUE;
+ }
+ 
+diff --git a/libs/circle/lib/net/linklayer.cpp b/libs/circle/lib/net/linklayer.cpp
+index ad4d7c31..a3f06ad3 100644
+--- a/libs/circle/lib/net/linklayer.cpp
++++ b/libs/circle/lib/net/linklayer.cpp
+@@ -20,15 +20,220 @@
+ #include <circle/net/linklayer.h>
+ #include <circle/net/networklayer.h>
+ #include <circle/net/netbuffer.h>
++#ifdef BMC64_WLAN_TRACE
++#include <circle/logger.h>
++#endif
+ #include <circle/util.h>
+ #include <assert.h>
+ 
++#ifdef BMC64_WLAN_LOW_IMPACT_TRACE
++enum
++{
++	BMX_EAPOL_STAGE_LINK_RX = 18,
++	BMX_EAPOL_STAGE_LINK_DROP_MAC,
++	BMX_EAPOL_STAGE_LINK_DROP_PROTO,
++	BMX_EAPOL_STAGE_LINK_RAW_ENQUEUE,
++	BMX_EAPOL_STAGE_LINK_RAW_DEQUEUE
++};
++
++extern "C" void bmx_eapol_low_frame (unsigned nStage, const unsigned char *pFrame,
++				     unsigned nLength, int nTXSeq, int nTXWindow,
++				     unsigned nFCMask, unsigned nQueueLength);
++extern "C" void bmx_eapol_low_payload (unsigned nStage, const unsigned char *pPayload,
++				       unsigned nLength);
++
++#define LinkLowEAPOLFrame(_stage, _frame, _len) \
++	bmx_eapol_low_frame ((_stage), (const unsigned char *) (_frame), (_len), -1, -1, 0, 0)
++#define LinkLowEAPOLPayload(_stage, _payload, _len) \
++	bmx_eapol_low_payload ((_stage), (const unsigned char *) (_payload), (_len))
++#else
++#define LinkLowEAPOLFrame(_stage, _frame, _len)
++#define LinkLowEAPOLPayload(_stage, _payload, _len)
++#endif
++
++#ifdef BMC64_WLAN_TRACE
++static const unsigned LinkTraceIPHeaderMinLen = 20;
++static const unsigned LinkTraceUDPHeaderLen = 8;
++static const u8 LinkTraceIPProtoUDP = 17;
++static const u16 LinkTraceDHCPPortServer = 67;
++static const u16 LinkTraceDHCPPortClient = 68;
++
++static u16 LinkTraceBE16 (const u8 *p)
++{
++	return (u16) p[0] << 8 | p[1];
++}
++
++static u32 LinkTraceBE32 (const u8 *p)
++{
++	return   (u32) p[0] << 24
++	       | (u32) p[1] << 16
++	       | (u32) p[2] << 8
++	       | (u32) p[3];
++}
++
++static boolean LinkTraceIsDHCPPort (u16 nSourcePort, u16 nDestPort)
++{
++	return    nSourcePort == LinkTraceDHCPPortServer
++	       || nSourcePort == LinkTraceDHCPPortClient
++	       || nDestPort == LinkTraceDHCPPortServer
++	       || nDestPort == LinkTraceDHCPPortClient;
++}
++
++static unsigned LinkTraceDHCPType (const u8 *pPayload, unsigned nPayloadLen)
++{
++	if (nPayloadLen < 240)
++	{
++		return 0;
++	}
++	if (   pPayload[236] != 99
++	    || pPayload[237] != 130
++	    || pPayload[238] != 83
++	    || pPayload[239] != 99)
++	{
++		return 0;
++	}
++
++	for (unsigned i = 240; i < nPayloadLen;)
++	{
++		u8 uchOption = pPayload[i];
++		if (uchOption == 255)
++		{
++			break;
++		}
++		if (uchOption == 0)
++		{
++			i++;
++			continue;
++		}
++		if (i+2 > nPayloadLen)
++		{
++			break;
++		}
++
++		unsigned nLen = pPayload[i+1];
++		if (i+2+nLen > nPayloadLen)
++		{
++			break;
++		}
++		if (uchOption == 53 && nLen >= 1)
++		{
++			return pPayload[i+2];
++		}
++
++		i += 2+nLen;
++	}
++
++	return 0;
++}
++
++static const char *LinkTraceDHCPTypeName (unsigned nType)
++{
++	switch (nType)
++	{
++	case 1:	return "DISCOVER";
++	case 2:	return "OFFER";
++	case 3:	return "REQUEST";
++	case 5:	return "ACK";
++	case 6:	return "NAK";
++	default:
++		return "UNKNOWN";
++	}
++}
++
++static void LinkTraceDHCPFrame (const char *pStage, const CNetBuffer *pNetBuffer)
++{
++	if (pNetBuffer == 0)
++	{
++		return;
++	}
++
++	unsigned nLength = pNetBuffer->GetLength ();
++	const u8 *pFrame = (const u8 *) pNetBuffer->GetPtr ();
++	if (pFrame == 0 || nLength < sizeof (TEthernetHeader) + LinkTraceIPHeaderMinLen + LinkTraceUDPHeaderLen)
++	{
++		return;
++	}
++
++	const TEthernetHeader *pEthernet = (const TEthernetHeader *) pFrame;
++	if (pEthernet->nProtocolType != BE (ETH_PROT_IP))
++	{
++		return;
++	}
++
++	const u8 *pIP = pFrame + sizeof (TEthernetHeader);
++	unsigned nIPHeaderLen = (pIP[0] & 0x0F) * 4;
++	if (   (pIP[0] >> 4) != 4
++	    || nIPHeaderLen < LinkTraceIPHeaderMinLen
++	    || nLength < sizeof (TEthernetHeader) + nIPHeaderLen + LinkTraceUDPHeaderLen
++	    || pIP[9] != LinkTraceIPProtoUDP)
++	{
++		return;
++	}
++
++	const u8 *pUDP = pIP + nIPHeaderLen;
++	u16 nSourcePort = LinkTraceBE16 (pUDP);
++	u16 nDestPort = LinkTraceBE16 (pUDP+2);
++	if (!LinkTraceIsDHCPPort (nSourcePort, nDestPort))
++	{
++		return;
++	}
++
++	unsigned nUDPLen = LinkTraceBE16 (pUDP+4);
++	if (   nUDPLen < LinkTraceUDPHeaderLen
++	    || nLength < sizeof (TEthernetHeader) + nIPHeaderLen + nUDPLen)
++	{
++		CLogger::Get ()->Write ("bmx-link", LogNotice,
++					"%s dhcp truncated len=%u udplen=%u ports=%u>%u",
++					pStage, nLength, nUDPLen, nSourcePort, nDestPort);
++		return;
++	}
++
++	const u8 *pDHCP = pUDP + LinkTraceUDPHeaderLen;
++	unsigned nDHCPPayloadLen = nUDPLen - LinkTraceUDPHeaderLen;
++	unsigned nDHCPType = LinkTraceDHCPType (pDHCP, nDHCPPayloadLen);
++	u32 nXID = nDHCPPayloadLen >= 8 ? LinkTraceBE32 (pDHCP+4) : 0;
++
++	CLogger::Get ()->Write ("bmx-link", LogNotice,
++				"%s dhcp eth=%02X:%02X:%02X:%02X:%02X:%02X>%02X:%02X:%02X:%02X:%02X:%02X ip=%u.%u.%u.%u>%u.%u.%u.%u udp=%u>%u type=%s(%u) xid=%08X",
++				pStage,
++				pFrame[6], pFrame[7], pFrame[8], pFrame[9], pFrame[10], pFrame[11],
++				pFrame[0], pFrame[1], pFrame[2], pFrame[3], pFrame[4], pFrame[5],
++				pIP[12], pIP[13], pIP[14], pIP[15],
++				pIP[16], pIP[17], pIP[18], pIP[19],
++				nSourcePort, nDestPort,
++				LinkTraceDHCPTypeName (nDHCPType), nDHCPType, nXID);
++}
++#else
++#define LinkTraceDHCPFrame(_stage, _buffer)
++#endif
++
++#ifdef BMC64_WLAN_LOW_IMPACT_TRACE
++enum
++{
++	BMX_DHCP_STAGE_LINK_RX = 9,
++	BMX_DHCP_STAGE_LINK_DROP_MAC = 10,
++	BMX_DHCP_STAGE_LINK_IP = 11,
++	BMX_DHCP_STAGE_LINK_DROP_PROTO = 12
++};
++
++extern "C" void bmx_dhcp_low_frame (unsigned nStage, const unsigned char *pFrame,
++				    unsigned nLength, int nTXSeq, int nTXWindow,
++				    unsigned nFCMask, unsigned nQueueLength);
++
++#define LinkLowDHCPFrame(_stage, _buffer, _length) \
++	bmx_dhcp_low_frame ((_stage), (const unsigned char *) (_buffer), (_length), -1, -1, 0, 0)
++#else
++#define LinkLowDHCPFrame(_stage, _buffer, _length)
++#endif
++
+ CLinkLayer::CLinkLayer (CNetConfig *pNetConfig, CNetDeviceLayer *pNetDevLayer)
+ :	m_pNetConfig (pNetConfig),
+ 	m_pNetDevLayer (pNetDevLayer),
+ 	m_pNetworkLayer (0),
+ 	m_pARPHandler (0),
++	m_ARPRxQueue (TRUE),
+ 	m_IPRxQueue (TRUE),
++	m_RawRxQueue (TRUE),
+ 	m_nRawProtocolType (0)
+ {
+ 	assert (m_pNetConfig != 0);
+@@ -90,6 +295,8 @@ void CLinkLayer::Process (void)
+ 
+ 		TEthernetHeader *pHeader = (TEthernetHeader *) pNetBuffer->GetPtr ();
+ 		assert (pHeader != 0);
++		LinkLowDHCPFrame (BMX_DHCP_STAGE_LINK_RX, pHeader, nLength);
++		LinkLowEAPOLFrame (BMX_EAPOL_STAGE_LINK_RX, pHeader, nLength);
+ 
+ 		CMACAddress MACAddressReceiver (pHeader->MACReceiver);
+ 		if (    MACAddressReceiver != *pOwnMACAddress
+@@ -97,6 +304,9 @@ void CLinkLayer::Process (void)
+ 		{
+ 			if (!MACAddressReceiver.IsMulticast ())
+ 			{
++				LinkLowDHCPFrame (BMX_DHCP_STAGE_LINK_DROP_MAC, pHeader, nLength);
++				LinkLowEAPOLFrame (BMX_EAPOL_STAGE_LINK_DROP_MAC, pHeader, nLength);
++				LinkTraceDHCPFrame ("rx drop-mac", pNetBuffer);
+ 				delete pNetBuffer;
+ 
+ 				continue;
+@@ -114,6 +324,9 @@ void CLinkLayer::Process (void)
+ 
+ 			if (i == MaxGroups)
+ 			{
++				LinkLowDHCPFrame (BMX_DHCP_STAGE_LINK_DROP_MAC, pHeader, nLength);
++				LinkLowEAPOLFrame (BMX_EAPOL_STAGE_LINK_DROP_MAC, pHeader, nLength);
++				LinkTraceDHCPFrame ("rx drop-multicast", pNetBuffer);
+ 				delete pNetBuffer;
+ 
+ 				continue;
+@@ -125,6 +338,8 @@ void CLinkLayer::Process (void)
+ 		switch (pHeader->nProtocolType)
+ 		{
+ 		case BE (ETH_PROT_IP):
++			LinkLowDHCPFrame (BMX_DHCP_STAGE_LINK_IP, pHeader, nLength);
++			LinkTraceDHCPFrame ("rx accept-ip", pNetBuffer);
+ 			m_IPRxQueue.Enqueue (pNetBuffer);
+ 			break;
+ 
+@@ -135,12 +350,16 @@ void CLinkLayer::Process (void)
+ 		default:
+ 			if (pHeader->nProtocolType == m_nRawProtocolType)
+ 			{
++				LinkLowEAPOLFrame (BMX_EAPOL_STAGE_LINK_RAW_ENQUEUE,
++						   pHeader, nLength);
+ 				pNetBuffer->SetPrivateData (pHeader->MACSender, MAC_ADDRESS_SIZE);
+ 
+ 				m_RawRxQueue.Enqueue (pNetBuffer);
+ 			}
+ 			else
+ 			{
++				LinkLowDHCPFrame (BMX_DHCP_STAGE_LINK_DROP_PROTO, pHeader, nLength);
++				LinkLowEAPOLFrame (BMX_EAPOL_STAGE_LINK_DROP_PROTO, pHeader, nLength);
+ 				delete pNetBuffer;
+ 			}
+ 			break;
+@@ -203,6 +422,7 @@ boolean CLinkLayer::Send (const CIPAddress &rReceiver, CNetBuffer *pNetBuffer)
+ 
+ 	MACAddressReceiver.CopyTo (pHeader->MACReceiver);
+ 
++	LinkTraceDHCPFrame ("tx enqueue", pNetBuffer);
+ 	m_pNetDevLayer->Send (pNetBuffer);
+ 
+ 	return TRUE;
+@@ -243,6 +463,9 @@ boolean CLinkLayer::ReceiveRaw (void *pBuffer, unsigned *pResultLength, CMACAddr
+ 	}
+ 
+ 	assert (pBuffer != 0);
++	LinkLowEAPOLPayload (BMX_EAPOL_STAGE_LINK_RAW_DEQUEUE,
++			     (const unsigned char *) pNetBuffer->GetPtr (),
++			     pNetBuffer->GetLength ());
+ 	memcpy (pBuffer, pNetBuffer->GetPtr (), pNetBuffer->GetLength ());
+ 
+ 	delete pNetBuffer;
+@@ -250,6 +473,11 @@ boolean CLinkLayer::ReceiveRaw (void *pBuffer, unsigned *pResultLength, CMACAddr
+ 	return TRUE;
+ }
+ 
++void CLinkLayer::FlushRawReceiveQueue (void)
++{
++	m_RawRxQueue.Flush ();
++}
++
+ boolean CLinkLayer::EnableReceiveRaw (u16 nProtocolType)
+ {
+ 	if (m_nRawProtocolType != 0)
+diff --git a/libs/circle/lib/net/netbufferqueue.cpp b/libs/circle/lib/net/netbufferqueue.cpp
+index dd770591..80c1d9af 100644
+--- a/libs/circle/lib/net/netbufferqueue.cpp
++++ b/libs/circle/lib/net/netbufferqueue.cpp
+@@ -53,7 +53,7 @@ size_t CNetBufferQueue::GetBytesQueued (void) const
+ 
+ void CNetBufferQueue::Flush (size_t ulBytes)
+ {
+-	while (m_pFirst && ulBytes)
++	while (ulBytes)
+ 	{
+ 		if (m_bProtected)
+ 		{
+@@ -61,6 +61,15 @@ void CNetBufferQueue::Flush (size_t ulBytes)
+ 		}
+ 
+ 		CNetBuffer *pEntry = m_pFirst;
++		if (!pEntry)
++		{
++			if (m_bProtected)
++			{
++				m_SpinLock.Release ();
++			}
++
++			break;
++		}
+ 
+ 		size_t ulLength = pEntry->GetLength ();
+ 		if (ulLength > ulBytes)
+@@ -145,14 +154,14 @@ void CNetBufferQueue::Enqueue (CNetBuffer *pNetBuffer)
+ 
+ CNetBuffer *CNetBufferQueue::Dequeue (void)
+ {
++	if (m_bProtected)
++	{
++		m_SpinLock.Acquire ();
++	}
++
+ 	CNetBuffer *pEntry = m_pFirst;
+ 	if (pEntry)
+ 	{
+-		if (m_bProtected)
+-		{
+-			m_SpinLock.Acquire ();
+-		}
+-
+ 		m_pFirst = pEntry->m_pNext;
+ 
+ 		if (!m_pFirst)
+@@ -173,11 +182,11 @@ CNetBuffer *CNetBufferQueue::Dequeue (void)
+ 		{
+ 			m_pPeekHead = m_pFirst;
+ 		}
++	}
+ 
+-		if (m_bProtected)
+-		{
+-			m_SpinLock.Release ();
+-		}
++	if (m_bProtected)
++	{
++		m_SpinLock.Release ();
+ 	}
+ 
+ 	return pEntry;
+diff --git a/libs/circle/lib/net/netdevlayer.cpp b/libs/circle/lib/net/netdevlayer.cpp
+index b706b83b..a5a3c872 100644
+--- a/libs/circle/lib/net/netdevlayer.cpp
++++ b/libs/circle/lib/net/netdevlayer.cpp
+@@ -28,11 +28,198 @@
+ 
+ const char FromNetDev[] = "netdev";
+ 
++#ifdef BMC64_WLAN_TRACE
++static const unsigned TraceETHHeaderLen = 14;
++static const unsigned TraceIPHeaderMinLen = 20;
++static const unsigned TraceUDPHeaderLen = 8;
++static const u16 TraceETHProtIP = 0x0800;
++static const u8 TraceIPProtoUDP = 17;
++static const u16 TraceDHCPPortServer = 67;
++static const u16 TraceDHCPPortClient = 68;
++
++static u16 NetDevTraceBE16 (const u8 *p)
++{
++	return (u16) p[0] << 8 | p[1];
++}
++
++static u32 NetDevTraceBE32 (const u8 *p)
++{
++	return   (u32) p[0] << 24
++	       | (u32) p[1] << 16
++	       | (u32) p[2] << 8
++	       | (u32) p[3];
++}
++
++static const char *NetDevTraceDHCPTypeName (unsigned nType)
++{
++	switch (nType)
++	{
++	case 1:	return "DISCOVER";
++	case 2:	return "OFFER";
++	case 3:	return "REQUEST";
++	case 5:	return "ACK";
++	case 6:	return "NAK";
++	default:
++		return "UNKNOWN";
++	}
++}
++
++static unsigned NetDevTraceDHCPType (const u8 *pPayload, unsigned nPayloadLen)
++{
++	if (nPayloadLen < 240)
++	{
++		return 0;
++	}
++	if (   pPayload[236] != 99
++	    || pPayload[237] != 130
++	    || pPayload[238] != 83
++	    || pPayload[239] != 99)
++	{
++		return 0;
++	}
++
++	for (unsigned i = 240; i < nPayloadLen;)
++	{
++		u8 uchOption = pPayload[i];
++		if (uchOption == 255)
++		{
++			break;
++		}
++		if (uchOption == 0)
++		{
++			i++;
++			continue;
++		}
++		if (i+2 > nPayloadLen)
++		{
++			break;
++		}
++
++		unsigned nLen = pPayload[i+1];
++		if (i+2+nLen > nPayloadLen)
++		{
++			break;
++		}
++		if (uchOption == 53 && nLen >= 1)
++		{
++			return pPayload[i+2];
++		}
++
++		i += 2+nLen;
++	}
++
++	return 0;
++}
++
++static boolean NetDevTraceIsDHCPPort (u16 nSourcePort, u16 nDestPort)
++{
++	return    nSourcePort == TraceDHCPPortServer
++	       || nSourcePort == TraceDHCPPortClient
++	       || nDestPort == TraceDHCPPortServer
++	       || nDestPort == TraceDHCPPortClient;
++}
++
++static void NetDevTraceDHCPFrame (const char *pStage, const void *pBuffer, unsigned nLength)
++{
++	const u8 *pFrame = (const u8 *) pBuffer;
++	if (pFrame == 0 || nLength < TraceETHHeaderLen + TraceIPHeaderMinLen + TraceUDPHeaderLen)
++	{
++		return;
++	}
++
++	u16 nEtherType = NetDevTraceBE16 (pFrame+12);
++	if (nEtherType != TraceETHProtIP)
++	{
++		return;
++	}
++
++	const u8 *pIP = pFrame + TraceETHHeaderLen;
++	unsigned nIPHeaderLen = (pIP[0] & 0x0F) * 4;
++	if (   (pIP[0] >> 4) != 4
++	    || nIPHeaderLen < TraceIPHeaderMinLen
++	    || nLength < TraceETHHeaderLen + nIPHeaderLen + TraceUDPHeaderLen
++	    || pIP[9] != TraceIPProtoUDP)
++	{
++		return;
++	}
++
++	unsigned nIPTotalLen = NetDevTraceBE16 (pIP+2);
++	if (nIPTotalLen < nIPHeaderLen + TraceUDPHeaderLen)
++	{
++		return;
++	}
++
++	const u8 *pUDP = pIP + nIPHeaderLen;
++	u16 nSourcePort = NetDevTraceBE16 (pUDP);
++	u16 nDestPort = NetDevTraceBE16 (pUDP+2);
++	if (!NetDevTraceIsDHCPPort (nSourcePort, nDestPort))
++	{
++		return;
++	}
++
++	unsigned nUDPLen = NetDevTraceBE16 (pUDP+4);
++	if (   nUDPLen < TraceUDPHeaderLen
++	    || nLength < TraceETHHeaderLen + nIPHeaderLen + nUDPLen)
++	{
++		CLogger::Get ()->Write ("bmx-dhcp-frame", LogNotice,
++					"%s truncated len=%u iplen=%u udplen=%u ports=%u>%u",
++					pStage, nLength, nIPTotalLen, nUDPLen,
++					nSourcePort, nDestPort);
++		return;
++	}
++
++	const u8 *pDHCP = pUDP + TraceUDPHeaderLen;
++	unsigned nDHCPPayloadLen = nUDPLen - TraceUDPHeaderLen;
++	unsigned nDHCPType = NetDevTraceDHCPType (pDHCP, nDHCPPayloadLen);
++	u32 nXID = nDHCPPayloadLen >= 8 ? NetDevTraceBE32 (pDHCP+4) : 0;
++	u16 nFlags = nDHCPPayloadLen >= 12 ? NetDevTraceBE16 (pDHCP+10) : 0;
++
++	CLogger::Get ()->Write ("bmx-dhcp-frame", LogNotice,
++				"%s len=%u eth=%02X:%02X:%02X:%02X:%02X:%02X>%02X:%02X:%02X:%02X:%02X:%02X ip=%u.%u.%u.%u>%u.%u.%u.%u udp=%u>%u dhcp=%s(%u) xid=%08X flags=%04X chaddr=%02X:%02X:%02X:%02X:%02X:%02X",
++				pStage, nLength,
++				pFrame[6], pFrame[7], pFrame[8], pFrame[9], pFrame[10], pFrame[11],
++				pFrame[0], pFrame[1], pFrame[2], pFrame[3], pFrame[4], pFrame[5],
++				pIP[12], pIP[13], pIP[14], pIP[15],
++				pIP[16], pIP[17], pIP[18], pIP[19],
++				nSourcePort, nDestPort,
++				NetDevTraceDHCPTypeName (nDHCPType), nDHCPType,
++				nXID, nFlags,
++				nDHCPPayloadLen >= 34 ? pDHCP[28] : 0,
++				nDHCPPayloadLen >= 34 ? pDHCP[29] : 0,
++				nDHCPPayloadLen >= 34 ? pDHCP[30] : 0,
++				nDHCPPayloadLen >= 34 ? pDHCP[31] : 0,
++				nDHCPPayloadLen >= 34 ? pDHCP[32] : 0,
++				nDHCPPayloadLen >= 34 ? pDHCP[33] : 0);
++}
++#else
++#define NetDevTraceDHCPFrame(_stage, _buffer, _length)
++#endif
++
++#ifdef BMC64_WLAN_LOW_IMPACT_TRACE
++enum
++{
++	BMX_DHCP_STAGE_NETDEV_TX = 5,
++	BMX_DHCP_STAGE_NETDEV_TX_FAILED = 6,
++	BMX_DHCP_STAGE_NETDEV_TX_DONE = 7,
++	BMX_DHCP_STAGE_NETDEV_RX = 8
++};
++
++extern "C" void bmx_dhcp_low_frame (unsigned nStage, const unsigned char *pFrame,
++				    unsigned nLength, int nTXSeq, int nTXWindow,
++				    unsigned nFCMask, unsigned nQueueLength);
++
++#define NetDevLowDHCPFrame(_stage, _buffer, _length) \
++	bmx_dhcp_low_frame ((_stage), (const unsigned char *) (_buffer), (_length), -1, -1, 0, 0)
++#else
++#define NetDevLowDHCPFrame(_stage, _buffer, _length)
++#endif
++
+ CNetDeviceLayer::CNetDeviceLayer (CNetConfig *pNetConfig, TNetDeviceType DeviceType)
+ :	m_DeviceType (DeviceType),
+ 	m_pNetConfig (pNetConfig),
+ 	m_pDevice (0),
+ 	m_TxQueue (TRUE),
++	m_RxQueue (TRUE),
+ 	m_pRxBuffer (new CNetBuffer (CNetBuffer::Receive, FRAME_BUFFER_SIZE))
+ {
+ }
+@@ -123,6 +310,9 @@ void CNetDeviceLayer::Process (void)
+ 		assert (pBuffer != 0);
+ 		assert (nLength != 0);
+ 
++		NetDevTraceDHCPFrame ("netdev tx", pBuffer, nLength);
++		NetDevLowDHCPFrame (BMX_DHCP_STAGE_NETDEV_TX, pBuffer, nLength);
++
+ 		if (unlikely (!IS_CACHE_ALIGNED (pBuffer, 0)))
+ 		{
+ 			memcpy (Buffer, pBuffer, nLength);
+@@ -142,6 +332,8 @@ void CNetDeviceLayer::Process (void)
+ 
+ 		if (!m_pDevice->SendFrame (pBuffer, nLength))
+ 		{
++			NetDevTraceDHCPFrame ("netdev tx-failed", pBuffer, nLength);
++			NetDevLowDHCPFrame (BMX_DHCP_STAGE_NETDEV_TX_FAILED, pBuffer, nLength);
+ 			CLogger::Get ()->Write (FromNetDev, LogWarning, "Frame dropped");
+ 
+ 			delete pTxBuffer;
+@@ -149,6 +341,9 @@ void CNetDeviceLayer::Process (void)
+ 			break;
+ 		}
+ 
++		NetDevTraceDHCPFrame ("netdev tx-done", pBuffer, nLength);
++		NetDevLowDHCPFrame (BMX_DHCP_STAGE_NETDEV_TX_DONE, pBuffer, nLength);
++
+ 		delete pTxBuffer;
+ 	}
+ 
+@@ -156,6 +351,8 @@ void CNetDeviceLayer::Process (void)
+ 	while (m_pDevice->ReceiveFrame (m_pRxBuffer->GetPtr (), &nLength))
+ 	{
+ 		assert (nLength < FRAME_BUFFER_SIZE);
++		NetDevTraceDHCPFrame ("netdev rx", m_pRxBuffer->GetPtr (), nLength);
++		NetDevLowDHCPFrame (BMX_DHCP_STAGE_NETDEV_RX, m_pRxBuffer->GetPtr (), nLength);
+ 		m_pRxBuffer->RemoveTrailer (FRAME_BUFFER_SIZE - nLength);
+ 
+ 		m_RxQueue.Enqueue (m_pRxBuffer);
+@@ -185,6 +382,11 @@ CNetBuffer *CNetDeviceLayer::Receive (void)
+ 	return m_RxQueue.Dequeue ();
+ }
+ 
++void CNetDeviceLayer::FlushReceiveQueue (void)
++{
++	m_RxQueue.Flush ();
++}
++
+ boolean CNetDeviceLayer::IsRunning (void) const
+ {
+ 	return m_pDevice != 0 && m_pDevice->IsLinkUp ();
+diff --git a/libs/circle/lib/net/networklayer.cpp b/libs/circle/lib/net/networklayer.cpp
+index e4edcda4..dbff05c3 100644
+--- a/libs/circle/lib/net/networklayer.cpp
++++ b/libs/circle/lib/net/networklayer.cpp
+@@ -21,8 +21,276 @@
+ #include <circle/net/checksumcalculator.h>
+ #include <circle/net/in.h>
+ #include <circle/util.h>
++#ifdef BMC64_WLAN_TRACE
++#include <circle/logger.h>
++#include <circle/string.h>
++#endif
+ #include <assert.h>
+ 
++#ifdef BMC64_WLAN_TRACE
++static void NetworkTraceDropIP (const char *pReason, const CIPAddress &rDestination, u8 nProtocol)
++{
++	CString IPString;
++	rDestination.Format (&IPString);
++	CLogger::Get ()->Write ("bmx-ip", LogNotice, "%s dst=%s proto=%u",
++				pReason, (const char *) IPString, nProtocol);
++}
++
++static u16 NetworkTraceBE16 (const u8 *p)
++{
++	return (u16) p[0] << 8 | p[1];
++}
++
++static u32 NetworkTraceBE32 (const u8 *p)
++{
++	return   (u32) p[0] << 24
++	       | (u32) p[1] << 16
++	       | (u32) p[2] << 8
++	       | (u32) p[3];
++}
++
++static boolean NetworkTraceIsDHCPPort (u16 nSourcePort, u16 nDestPort)
++{
++	return    nSourcePort == 67
++	       || nSourcePort == 68
++	       || nDestPort == 67
++	       || nDestPort == 68;
++}
++
++static unsigned NetworkTraceDHCPType (const u8 *pPayload, unsigned nPayloadLen)
++{
++	if (nPayloadLen < 240)
++	{
++		return 0;
++	}
++	if (   pPayload[236] != 99
++	    || pPayload[237] != 130
++	    || pPayload[238] != 83
++	    || pPayload[239] != 99)
++	{
++		return 0;
++	}
++
++	for (unsigned i = 240; i < nPayloadLen;)
++	{
++		u8 uchOption = pPayload[i];
++		if (uchOption == 255)
++		{
++			break;
++		}
++		if (uchOption == 0)
++		{
++			i++;
++			continue;
++		}
++		if (i+2 > nPayloadLen)
++		{
++			break;
++		}
++
++		unsigned nLen = pPayload[i+1];
++		if (i+2+nLen > nPayloadLen)
++		{
++			break;
++		}
++		if (uchOption == 53 && nLen >= 1)
++		{
++			return pPayload[i+2];
++		}
++
++		i += 2+nLen;
++	}
++
++	return 0;
++}
++
++static const char *NetworkTraceDHCPTypeName (unsigned nType)
++{
++	switch (nType)
++	{
++	case 1:	return "DISCOVER";
++	case 2:	return "OFFER";
++	case 3:	return "REQUEST";
++	case 5:	return "ACK";
++	case 6:	return "NAK";
++	default:
++		return "UNKNOWN";
++	}
++}
++
++static void NetworkTraceDHCPIP (const char *pStage, const TIPHeader *pHeader,
++				unsigned nPacketLength, unsigned nHeaderLength)
++{
++	if (   pHeader == 0
++	    || pHeader->nProtocol != IPPROTO_UDP
++	    || nPacketLength < nHeaderLength + UDP_HEADER_LEN)
++	{
++		return;
++	}
++
++	const u8 *pIP = (const u8 *) pHeader;
++	const u8 *pUDP = pIP + nHeaderLength;
++	u16 nSourcePort = NetworkTraceBE16 (pUDP);
++	u16 nDestPort = NetworkTraceBE16 (pUDP+2);
++	if (!NetworkTraceIsDHCPPort (nSourcePort, nDestPort))
++	{
++		return;
++	}
++
++	unsigned nUDPLen = NetworkTraceBE16 (pUDP+4);
++	if (nUDPLen < UDP_HEADER_LEN || nPacketLength < nHeaderLength + nUDPLen)
++	{
++		CLogger::Get ()->Write ("bmx-ip", LogNotice,
++					"%s dhcp truncated iplen=%u udplen=%u ports=%u>%u",
++					pStage, nPacketLength, nUDPLen,
++					nSourcePort, nDestPort);
++		return;
++	}
++
++	const u8 *pDHCP = pUDP + UDP_HEADER_LEN;
++	unsigned nDHCPPayloadLen = nUDPLen - UDP_HEADER_LEN;
++	unsigned nDHCPType = NetworkTraceDHCPType (pDHCP, nDHCPPayloadLen);
++	u32 nXID = nDHCPPayloadLen >= 8 ? NetworkTraceBE32 (pDHCP+4) : 0;
++
++	CLogger::Get ()->Write ("bmx-ip", LogNotice,
++				"%s dhcp ip=%u.%u.%u.%u>%u.%u.%u.%u udp=%u>%u type=%s(%u) xid=%08X",
++				pStage,
++				pHeader->SourceAddress[0], pHeader->SourceAddress[1],
++				pHeader->SourceAddress[2], pHeader->SourceAddress[3],
++				pHeader->DestinationAddress[0], pHeader->DestinationAddress[1],
++				pHeader->DestinationAddress[2], pHeader->DestinationAddress[3],
++				nSourcePort, nDestPort,
++				NetworkTraceDHCPTypeName (nDHCPType), nDHCPType, nXID);
++}
++#else
++#define NetworkTraceDropIP(_reason, _destination, _protocol)
++#define NetworkTraceDHCPIP(_stage, _header, _packet_length, _header_length)
++#endif
++
++static u16 NetworkLayerBE16 (const u8 *p)
++{
++	return (u16) p[0] << 8 | p[1];
++}
++
++static boolean NetworkLayerIsDHCPReplyType (unsigned nType)
++{
++	return    nType == 2	// OFFER
++	       || nType == 5	// ACK
++	       || nType == 6;	// NAK
++}
++
++static unsigned NetworkLayerDHCPType (const u8 *pPayload, unsigned nPayloadLen)
++{
++	if (nPayloadLen < 240)
++	{
++		return 0;
++	}
++	if (   pPayload[0] != 2		// BOOTREPLY
++	    || pPayload[1] != 1		// Ethernet
++	    || pPayload[2] != MAC_ADDRESS_SIZE
++	    || pPayload[236] != 99
++	    || pPayload[237] != 130
++	    || pPayload[238] != 83
++	    || pPayload[239] != 99)
++	{
++		return 0;
++	}
++
++	for (unsigned i = 240; i < nPayloadLen;)
++	{
++		u8 uchOption = pPayload[i];
++		if (uchOption == 255)
++		{
++			break;
++		}
++		if (uchOption == 0)
++		{
++			i++;
++			continue;
++		}
++		if (i+2 > nPayloadLen)
++		{
++			break;
++		}
++
++		unsigned nLen = pPayload[i+1];
++		if (i+2+nLen > nPayloadLen)
++		{
++			break;
++		}
++		if (uchOption == 53 && nLen >= 1)
++		{
++			return pPayload[i+2];
++		}
++
++		i += 2+nLen;
++	}
++
++	return 0;
++}
++
++static boolean NetworkLayerIsPreIPDHCPReply (const TIPHeader *pHeader,
++					     unsigned nPacketLength,
++					     unsigned nHeaderLength,
++					     unsigned nTotalLength)
++{
++	if (   pHeader->nProtocol != IPPROTO_UDP
++	    || nTotalLength < nHeaderLength + UDP_HEADER_LEN
++	    || nPacketLength < nTotalLength)
++	{
++		return FALSE;
++	}
++
++	const u8 *pIP = (const u8 *) pHeader;
++	const u8 *pUDP = pIP + nHeaderLength;
++	u16 nSourcePort = NetworkLayerBE16 (pUDP);
++	u16 nDestPort = NetworkLayerBE16 (pUDP+2);
++	if (nSourcePort != 67 || nDestPort != 68)
++	{
++		return FALSE;
++	}
++
++	unsigned nUDPLen = NetworkLayerBE16 (pUDP+4);
++	if (   nUDPLen < UDP_HEADER_LEN
++	    || nHeaderLength + nUDPLen > nTotalLength)
++	{
++		return FALSE;
++	}
++
++	const u8 *pDHCP = pUDP + UDP_HEADER_LEN;
++	unsigned nDHCPPayloadLen = nUDPLen - UDP_HEADER_LEN;
++	return NetworkLayerIsDHCPReplyType (NetworkLayerDHCPType (pDHCP, nDHCPPayloadLen));
++}
++
++#ifdef BMC64_WLAN_LOW_IMPACT_TRACE
++enum
++{
++	BMX_DHCP_STAGE_IP_RX = 13,
++	BMX_DHCP_STAGE_IP_DROP_SHORT = 14,
++	BMX_DHCP_STAGE_IP_DROP_IHL = 15,
++	BMX_DHCP_STAGE_IP_DROP_CHECKSUM = 16,
++	BMX_DHCP_STAGE_IP_DROP_NOOWN = 17,
++	BMX_DHCP_STAGE_IP_DROP_FRAGMENT = 18,
++	BMX_DHCP_STAGE_IP_DROP_TRUNC = 19,
++	BMX_DHCP_STAGE_IP_ENQUEUE = 20
++};
++
++enum
++{
++	BMX_DHCP_REASON_NONE = 0,
++	BMX_DHCP_REASON_SHORT = 1,
++	BMX_DHCP_REASON_HEADER = 2
++};
++
++extern "C" void bmx_dhcp_low_ip (unsigned nStage, const unsigned char *pIP,
++				 unsigned nLength, unsigned nReason);
++
++#define NetworkLowDHCPIP(_stage, _ip, _length, _reason) \
++	bmx_dhcp_low_ip ((_stage), (const unsigned char *) (_ip), (_length), (_reason))
++#else
++#define NetworkLowDHCPIP(_stage, _ip, _length, _reason)
++#endif
++
+ CNetworkLayer::CNetworkLayer (CNetConfig *pNetConfig, CLinkLayer *pLinkLayer)
+ :	m_pNetConfig (pNetConfig),
+ 	m_pLinkLayer (pLinkLayer),
+@@ -75,16 +343,23 @@ void CNetworkLayer::Process (void)
+ 		size_t nResultLength = pNetBuffer->GetLength ();
+ 		if (nResultLength <= sizeof (TIPHeader))
+ 		{
++			NetworkLowDHCPIP (BMX_DHCP_STAGE_IP_DROP_SHORT,
++					  pNetBuffer->GetPtr (), nResultLength,
++					  BMX_DHCP_REASON_SHORT);
+ 			delete pNetBuffer;
+ 
+ 			continue;
+ 		}
+ 		TIPHeader *pHeader = (TIPHeader *) pNetBuffer->GetPtr ();
++		NetworkLowDHCPIP (BMX_DHCP_STAGE_IP_RX, pHeader, nResultLength,
++				  BMX_DHCP_REASON_NONE);
+ 
+ 		unsigned nHeaderLength = pHeader->nVersionIHL & 0xF;
+ 		if (   nHeaderLength < IP_HEADER_LENGTH_DWORD_MIN
+ 		    || nHeaderLength > IP_HEADER_LENGTH_DWORD_MAX)
+ 		{
++			NetworkLowDHCPIP (BMX_DHCP_STAGE_IP_DROP_IHL, pHeader,
++					  nResultLength, BMX_DHCP_REASON_HEADER);
+ 			delete pNetBuffer;
+ 
+ 			continue;
+@@ -92,6 +367,8 @@ void CNetworkLayer::Process (void)
+ 		nHeaderLength *= 4;
+ 		if (nResultLength <= nHeaderLength)
+ 		{
++			NetworkLowDHCPIP (BMX_DHCP_STAGE_IP_DROP_SHORT, pHeader,
++					  nResultLength, BMX_DHCP_REASON_SHORT);
+ 			delete pNetBuffer;
+ 
+ 			continue;
+@@ -100,10 +377,14 @@ void CNetworkLayer::Process (void)
+ 		if (   CChecksumCalculator::SimpleCalculate (pHeader, nHeaderLength) != CHECKSUM_OK
+ 		    || (pHeader->nVersionIHL >> 4) != IP_VERSION)
+ 		{
++			NetworkLowDHCPIP (BMX_DHCP_STAGE_IP_DROP_CHECKSUM, pHeader,
++					  nResultLength, BMX_DHCP_REASON_HEADER);
+ 			delete pNetBuffer;
+ 
+ 			continue;
+ 		}
++		unsigned nTotalLength = le2be16 (pHeader->nTotalLength);
++		NetworkTraceDHCPIP ("rx", pHeader, nResultLength, nHeaderLength);
+ 
+ 		CIPAddress IPAddressDestination (pHeader->DestinationAddress);
+ 		if (!pOwnIPAddress->IsNull ())
+@@ -113,6 +394,10 @@ void CNetworkLayer::Process (void)
+ 			    && *m_pNetConfig->GetBroadcastAddress () != IPAddressDestination
+ 			    && !IPAddressDestination.IsMulticast ())
+ 			{
++				NetworkTraceDropIP ("drop wrong-dst", IPAddressDestination,
++						    pHeader->nProtocol);
++				NetworkLowDHCPIP (BMX_DHCP_STAGE_IP_DROP_NOOWN, pHeader,
++						  nResultLength, BMX_DHCP_REASON_NONE);
+ 				delete pNetBuffer;
+ 
+ 				continue;
+@@ -120,26 +405,40 @@ void CNetworkLayer::Process (void)
+ 		}
+ 		else
+ 		{
+-			if (!IPAddressDestination.IsBroadcast ())
++			if (   !IPAddressDestination.IsBroadcast ()
++			    && !NetworkLayerIsPreIPDHCPReply (pHeader, nResultLength,
++							      nHeaderLength, nTotalLength))
+ 			{
++				NetworkTraceDropIP ("drop no-own-ip", IPAddressDestination,
++						    pHeader->nProtocol);
++				NetworkLowDHCPIP (BMX_DHCP_STAGE_IP_DROP_NOOWN, pHeader,
++						  nResultLength, BMX_DHCP_REASON_NONE);
+ 				delete pNetBuffer;
+ 
+ 				continue;
+ 			}
++			if (!IPAddressDestination.IsBroadcast ())
++			{
++				NetworkTraceDropIP ("accept pre-ip-dhcp", IPAddressDestination,
++						    pHeader->nProtocol);
++			}
+ 		}
+ 
+ 		if (   (pHeader->nFlagsFragmentOffset & IP_FLAGS_MF)
+ 		    ||    IP_FRAGMENT_OFFSET (le2be16 (pHeader->nFlagsFragmentOffset))
+ 		       != IP_FRAGMENT_OFFSET_FIRST)
+ 		{
++			NetworkLowDHCPIP (BMX_DHCP_STAGE_IP_DROP_FRAGMENT, pHeader,
++					  nResultLength, BMX_DHCP_REASON_NONE);
+ 			delete pNetBuffer;
+ 
+ 			continue;
+ 		}
+ 		
+-		unsigned nTotalLength = le2be16 (pHeader->nTotalLength);
+ 		if (nResultLength < nTotalLength)
+ 		{
++			NetworkLowDHCPIP (BMX_DHCP_STAGE_IP_DROP_TRUNC, pHeader,
++					  nResultLength, BMX_DHCP_REASON_SHORT);
+ 			delete pNetBuffer;
+ 
+ 			continue;
+@@ -158,6 +457,9 @@ void CNetworkLayer::Process (void)
+ 
+ 		pNetBuffer->SetPrivateData (&Param, sizeof Param);
+ 
++		NetworkLowDHCPIP (BMX_DHCP_STAGE_IP_ENQUEUE, pHeader,
++				  nTotalLength, BMX_DHCP_REASON_NONE);
++
+ 		pNetBuffer->RemoveHeader (nHeaderLength);
+ 
+ 		if (pHeader->nProtocol == IPPROTO_ICMP)
+@@ -175,6 +477,7 @@ void CNetworkLayer::Process (void)
+ 		}
+ 		else
+ 		{
++			NetworkTraceDHCPIP ("accept", pHeader, nTotalLength, nHeaderLength);
+ 			m_RxQueue.Enqueue (pNetBuffer);
+ 		}
+ 	}
+diff --git a/libs/circle/lib/net/retranstimeoutcalc.cpp b/libs/circle/lib/net/retranstimeoutcalc.cpp
+index b10e7bee..3aee87f6 100644
+--- a/libs/circle/lib/net/retranstimeoutcalc.cpp
++++ b/libs/circle/lib/net/retranstimeoutcalc.cpp
+@@ -55,7 +55,7 @@ CRetransmissionTimeoutCalculator::CRetransmissionTimeoutCalculator (void)
+ 
+ CRetransmissionTimeoutCalculator::~CRetransmissionTimeoutCalculator (void)
+ {
+-	delete m_SegmentMap;
++	delete[] m_SegmentMap;
+ 	m_SegmentMap = 0;
+ 
+ 	m_pTimer = 0;
+diff --git a/libs/circle/lib/net/tcpconnection.cpp b/libs/circle/lib/net/tcpconnection.cpp
+index d1b5c121..40d8a009 100644
+--- a/libs/circle/lib/net/tcpconnection.cpp
++++ b/libs/circle/lib/net/tcpconnection.cpp
+@@ -37,7 +37,9 @@
+ #include <circle/net/in.h>
+ #include <assert.h>
+ 
+-//#define TCP_DEBUG
++#if defined(BMC64_TCP_LOG_LEVEL) && BMC64_TCP_LOG_LEVEL >= 3
++#define TCP_DEBUG
++#endif
+ 
+ #define TCP_MAX_CONNECTIONS		1000	// maximum number of active TCP connections
+ 
+@@ -57,6 +59,7 @@
+ 
+ #define HZ_TIMEWAIT			(60 * HZ)
+ #define HZ_FIN_TIMEOUT			(60 * HZ)	// timeout in FIN-WAIT-2 state
++#define TCP_CONNECT_TIMEOUT_US		(10 * 1000000)
+ 
+ #define MAX_RETRANSMISSIONS		5
+ 
+@@ -287,8 +290,13 @@ int CTCPConnection::Connect (void)
+ 	{
+ 	case TCPStateSynSent:
+ 	case TCPStateSynReceived:
+-		m_Event.Clear ();
+-		m_Event.Wait ();
++		if (m_Event.WaitWithTimeout (TCP_CONNECT_TIMEOUT_US))
++		{
++			StopTimer (TCPTimerRetransmission);
++			m_nErrno = -NET_ERROR_CONNECTION_TIMED_OUT;
++			NEW_STATE (TCPStateClosed);
++			return m_nErrno;
++		}
+ 		break;
+ 
+ 	case TCPStateEstablished:
+@@ -774,6 +782,7 @@ int CTCPConnection::PacketReceived (CNetBuffer	*pPacket,
+ 			return 0;
+ 		}
+ 
++		m_Checksum.SetSourceAddress (rReceiverIP);
+ 		m_Checksum.SetDestinationAddress (rSenderIP);
+ 	}
+ 
+@@ -1140,6 +1149,24 @@ int CTCPConnection::PacketReceived (CNetBuffer	*pPacket,
+ 		// step 4 (check SYN bit)
+ 		if (nFlags & TCP_FLAG_SYN)
+ 		{
++			// A retransmitted initial SYN can arrive while a passive
++			// connection is waiting for the final ACK. Re-send the original
++			// SYN+ACK instead of dropping back to LISTEN. This is especially
++			// important on high-latency links, where the retransmitted SYN may
++			// already be in flight when the first SYN+ACK reaches the peer.
++			if (   m_State == TCPStateSynReceived
++			    && !m_bActiveOpen
++			    && nSEG_SEQ == m_nIRS
++			    && nDataLength == 0
++			    && !(nFlags & (TCP_FLAG_ACK | TCP_FLAG_RESET | TCP_FLAG_FIN)))
++			{
++				SendSegment (TCP_FLAG_SYN | TCP_FLAG_ACK, m_nISS, m_nRCV_NXT);
++
++				delete pPacket;
++
++				return 1;
++			}
++
+ 			// RFC 1122 section 4.2.2.20 (e)
+ 			if (   m_State == TCPStateSynReceived
+ 			    && !m_bActiveOpen)
+@@ -1299,7 +1326,23 @@ int CTCPConnection::PacketReceived (CNetBuffer	*pPacket,
+ 			}
+ 			else if (le (nSEG_ACK, m_nSND_UNA))	// RFC 1122 section 4.2.2.20 (g)
+ 			{
+-				OnDuplicateAck ();
++				if (FLIGHT_SIZE)
++				{
++					OnDuplicateAck ();
++				}
++				else
++				{
++					// Duplicate ACKs are only meaningful when data is in flight.
++					// If no data is outstanding, Fast Retransmit would resend the
++					// first queued-but-unsent buffer at SND_UNA without advancing
++					// SND_NXT. A later peer ACK for that byte would then look like
++					// an ACK for unsent data and cause valid piggybacked RX data to
++					// be dropped before step 7 below.
++					m_nDupAckCount = 0;
++#ifdef TCP_DEBUG
++					CLogger::Get ()->Write (FromTCP, LogDebug, "Duplicate ACK ignored, no flight");
++#endif
++				}
+ 				
+ 				// RFC 1122 section 4.2.2.20 (g)
+ 				if (bwlh (m_nSND_UNA, nSEG_ACK, m_nSND_NXT))
+diff --git a/libs/circle/lib/net/transportlayer.cpp b/libs/circle/lib/net/transportlayer.cpp
+index 453d01c8..c49ebeb9 100644
+--- a/libs/circle/lib/net/transportlayer.cpp
++++ b/libs/circle/lib/net/transportlayer.cpp
+@@ -23,6 +23,9 @@
+ #include <circle/net/error.h>
+ #include <circle/net/in.h>
+ #include <circle/string.h>
++#ifdef BMC64_WLAN_TRACE
++#include <circle/logger.h>
++#endif
+ #include <circle/macros.h>
+ #include <circle/util.h>
+ #include <assert.h>
+@@ -30,6 +33,52 @@
+ #define OWN_PORT_MIN	60000
+ #define OWN_PORT_MAX	60999
+ 
++#ifdef BMC64_WLAN_TRACE
++static u16 TransportTraceBE16 (const u8 *p)
++{
++	return (u16) p[0] << 8 | p[1];
++}
++
++static boolean TransportTraceIsDHCPPort (u16 nSourcePort, u16 nDestPort)
++{
++	return    nSourcePort == 67
++	       || nSourcePort == 68
++	       || nDestPort == 67
++	       || nDestPort == 68;
++}
++
++static void TransportTraceUnconsumedDHCP (CNetBuffer *pNetBuffer,
++					  const CIPAddress &rSender,
++					  const CIPAddress &rReceiver,
++					  int nProtocol)
++{
++	if (nProtocol != IPPROTO_UDP || pNetBuffer == 0 || pNetBuffer->GetLength () < UDP_HEADER_LEN)
++	{
++		return;
++	}
++
++	const u8 *pUDP = (const u8 *) pNetBuffer->GetPtr ();
++	u16 nSourcePort = TransportTraceBE16 (pUDP);
++	u16 nDestPort = TransportTraceBE16 (pUDP+2);
++	if (!TransportTraceIsDHCPPort (nSourcePort, nDestPort))
++	{
++		return;
++	}
++
++	CString SenderString;
++	CString ReceiverString;
++	rSender.Format (&SenderString);
++	rReceiver.Format (&ReceiverString);
++	CLogger::Get ()->Write ("bmx-transport", LogNotice,
++				"unconsumed dhcp src=%s:%u dst=%s:%u len=%u",
++				(const char *) SenderString, nSourcePort,
++				(const char *) ReceiverString, nDestPort,
++				(unsigned) pNetBuffer->GetLength ());
++}
++#else
++#define TransportTraceUnconsumedDHCP(_buffer, _sender, _receiver, _protocol)
++#endif
++
+ CTransportLayer::CTransportLayer (CNetConfig *pNetConfig, CNetworkLayer *pNetworkLayer)
+ :	m_pNetConfig (pNetConfig),
+ 	m_pNetworkLayer (pNetworkLayer),
+@@ -69,8 +118,13 @@ void CTransportLayer::Process (void)
+ 				continue;
+ 			}
+ 
+-			if (((CNetConnection *) m_pConnection[i])->PacketReceived (
+-				pNetBuffer, Sender, Receiver, nProtocol) != 0)
++			CNetConnection *pConnection = (CNetConnection *) m_pConnection[i];
++			if (pConnection->IsTerminated ())
++			{
++				continue;
++			}
++
++			if (pConnection->PacketReceived (pNetBuffer, Sender, Receiver, nProtocol) != 0)
+ 			{
+ 				pNetBuffer = 0;
+ 				break;
+@@ -79,6 +133,8 @@ void CTransportLayer::Process (void)
+ 
+ 		if (i >= m_pConnection.GetCount ())
+ 		{
++			TransportTraceUnconsumedDHCP (pNetBuffer, Sender, Receiver, nProtocol);
++
+ 			// send RESET on not consumed TCP segment
+ 			if (m_TCPRejector.PacketReceived (pNetBuffer,
+ 							  Sender, Receiver, nProtocol) != 0)
+@@ -104,8 +160,14 @@ void CTransportLayer::Process (void)
+ 				continue;
+ 			}
+ 
+-			if (((CNetConnection *) m_pConnection[i])->NotificationReceived (
+-				Type, Sender, Receiver, nSendPort, nReceivePort, nProtocol) != 0)
++			CNetConnection *pConnection = (CNetConnection *) m_pConnection[i];
++			if (pConnection->IsTerminated ())
++			{
++				continue;
++			}
++
++			if (pConnection->NotificationReceived (Type, Sender, Receiver,
++							       nSendPort, nReceivePort, nProtocol) != 0)
+ 			{
+ 				break;
+ 			}
+@@ -186,8 +248,6 @@ int CTransportLayer::Bind (u16 nOwnPort, int nProtocol)
+ 			}
+ 		}
+ 		while (j < m_pConnection.GetCount ());
+-
+-		m_SpinLock.Release ();
+ 	}
+ 
+ 	assert (m_pNetConfig != 0);
+diff --git a/libs/circle/lib/net/udpconnection.cpp b/libs/circle/lib/net/udpconnection.cpp
+index 526468f6..963bfd97 100644
+--- a/libs/circle/lib/net/udpconnection.cpp
++++ b/libs/circle/lib/net/udpconnection.cpp
+@@ -21,6 +21,10 @@
+ #include <circle/net/error.h>
+ #include <circle/net/sizes.h>
+ #include <circle/net/in.h>
++#ifdef BMC64_WLAN_TRACE
++#include <circle/logger.h>
++#include <circle/string.h>
++#endif
+ #include <circle/macros.h>
+ #include <circle/util.h>
+ #include <assert.h>
+@@ -43,6 +47,79 @@ struct TUDPPrivateData
+ 	u16	nSourcePort;
+ };
+ 
++#ifdef BMC64_WLAN_TRACE
++static boolean UDPTraceIsDHCPPort (u16 nSourcePort, u16 nDestPort)
++{
++	return    nSourcePort == 67
++	       || nSourcePort == 68
++	       || nDestPort == 67
++	       || nDestPort == 68;
++}
++
++static void UDPTraceDHCP (const char *pStage, const CIPAddress &rSenderIP,
++			  const CIPAddress &rReceiverIP, u16 nSourcePort,
++			  u16 nDestPort, size_t nLength, u16 nOwnPort,
++			  u16 nForeignPort, boolean bActiveOpen)
++{
++	if (!UDPTraceIsDHCPPort (nSourcePort, nDestPort))
++	{
++		return;
++	}
++
++	CString SenderString;
++	CString ReceiverString;
++	rSenderIP.Format (&SenderString);
++	rReceiverIP.Format (&ReceiverString);
++	CLogger::Get ()->Write ("bmx-udp", LogNotice,
++				"%s dhcp src=%s:%u dst=%s:%u len=%u own=%u foreign=%u active=%u",
++				pStage, (const char *) SenderString, nSourcePort,
++				(const char *) ReceiverString, nDestPort,
++				(unsigned) nLength, nOwnPort, nForeignPort,
++				bActiveOpen ? 1 : 0);
++}
++#else
++#define UDPTraceDHCP(_stage, _sender, _receiver, _source_port, _dest_port, _length, _own_port, _foreign_port, _active)
++#endif
++
++#ifdef BMC64_WLAN_LOW_IMPACT_TRACE
++enum
++{
++	BMX_DHCP_STAGE_UDP_ENTER = 21,
++	BMX_DHCP_STAGE_UDP_DROP_OWNPORT = 22,
++	BMX_DHCP_STAGE_UDP_DROP_FOREIGNPORT = 23,
++	BMX_DHCP_STAGE_UDP_DROP_FOREIGNIP = 24,
++	BMX_DHCP_STAGE_UDP_DROP_LENGTH = 25,
++	BMX_DHCP_STAGE_UDP_DROP_CHECKSUM = 26,
++	BMX_DHCP_STAGE_UDP_DROP_BCAST = 27,
++	BMX_DHCP_STAGE_UDP_ENQUEUE = 28,
++	BMX_DHCP_STAGE_UDP_DEQUEUE = 29
++};
++
++enum
++{
++	BMX_DHCP_REASON_NONE = 0,
++	BMX_DHCP_REASON_SHORT = 1
++};
++
++extern "C" void bmx_dhcp_low_udp (unsigned nStage, const unsigned char *pUDP,
++				  unsigned nLength, const unsigned char *pSourceIP,
++				  const unsigned char *pDestIP, unsigned nReason);
++extern "C" void bmx_dhcp_low_payload (unsigned nStage, const unsigned char *pPayload,
++				      unsigned nLength, const unsigned char *pSourceIP,
++				      unsigned nSourcePort, unsigned nDestPort,
++				      unsigned nReason);
++
++#define UDPLowDHCPPacket(_stage, _packet, _length, _sender, _receiver, _reason) \
++	bmx_dhcp_low_udp ((_stage), (const unsigned char *) (_packet), (_length), \
++			  (_sender).Get (), (_receiver).Get (), (_reason))
++#define UDPLowDHCPPayload(_stage, _payload, _length, _source, _sport, _dport, _reason) \
++	bmx_dhcp_low_payload ((_stage), (const unsigned char *) (_payload), (_length), \
++			      (_source), (_sport), (_dport), (_reason))
++#else
++#define UDPLowDHCPPacket(_stage, _packet, _length, _sender, _receiver, _reason)
++#define UDPLowDHCPPayload(_stage, _payload, _length, _source, _sport, _dport, _reason)
++#endif
++
+ #define UDP_CONFIG_MSS	(ETH_MAX_LEN - ETH_HEADER_LEN - IP_HEADER_LEN - UDP_HEADER_LEN)
+ 
+ CUDPConnection::CUDPConnection (CNetConfig	*pNetConfig,
+@@ -223,6 +300,13 @@ int CUDPConnection::Receive (CNetBuffer **ppNetBuffer, int nFlags)
+ 
+ 	size_t nLength = (*ppNetBuffer)->GetLength ();
+ 	assert (nLength <= FRAME_BUFFER_SIZE);
++	TUDPPrivateData *pData = (TUDPPrivateData *) (*ppNetBuffer)->GetPrivateData ();
++	if (pData != 0)
++	{
++		UDPLowDHCPPayload (BMX_DHCP_STAGE_UDP_DEQUEUE, (*ppNetBuffer)->GetPtr (),
++				   nLength, pData->SourceAddress, pData->nSourcePort,
++				   m_nOwnPort, BMX_DHCP_REASON_NONE);
++	}
+ 
+ 	return nLength;
+ }
+@@ -451,13 +535,25 @@ int CUDPConnection::PacketReceived (CNetBuffer *pPacket,
+ 	TUDPHeader *pHeader = (TUDPHeader *) pPacket->GetPtr ();
+ 	assert (pHeader != 0);
+ 
+-	if (m_nOwnPort != be2le16 (pHeader->nDestPort))
++	u16 nSourcePort = be2le16 (pHeader->nSourcePort);
++	u16 nDestPort = be2le16 (pHeader->nDestPort);
++	UDPLowDHCPPacket (BMX_DHCP_STAGE_UDP_ENTER, pHeader, nLength, rSenderIP,
++			  rReceiverIP, BMX_DHCP_REASON_NONE);
++
++	if (m_nOwnPort != nDestPort)
+ 	{
++		UDPTraceDHCP ("skip-port", rSenderIP, rReceiverIP, nSourcePort, nDestPort,
++			      nLength, m_nOwnPort, m_nForeignPort, m_bActiveOpen);
++		UDPLowDHCPPacket (BMX_DHCP_STAGE_UDP_DROP_OWNPORT, pHeader, nLength,
++				  rSenderIP, rReceiverIP, BMX_DHCP_REASON_NONE);
+ 		return 0;
+ 	}
+ 
+ 	if (rSenderIP.IsMulticast ())
+ 	{
++		UDPTraceDHCP ("drop-multicast-source", rSenderIP, rReceiverIP,
++			      nSourcePort, nDestPort, nLength, m_nOwnPort,
++			      m_nForeignPort, m_bActiveOpen);
+ 		delete pPacket;
+ 
+ 		return -1;
+@@ -465,11 +561,16 @@ int CUDPConnection::PacketReceived (CNetBuffer *pPacket,
+ 
+ 	assert (m_pNetConfig != 0);
+ 
+-	u16 nSourcePort = be2le16 (pHeader->nSourcePort);
+ 	if (m_bActiveOpen)
+ 	{
+ 		if (m_nForeignPort != nSourcePort)
+ 		{
++			UDPTraceDHCP ("skip-foreign-port", rSenderIP, rReceiverIP,
++				      nSourcePort, nDestPort, nLength, m_nOwnPort,
++				      m_nForeignPort, m_bActiveOpen);
++			UDPLowDHCPPacket (BMX_DHCP_STAGE_UDP_DROP_FOREIGNPORT, pHeader,
++					  nLength, rSenderIP, rReceiverIP,
++					  BMX_DHCP_REASON_NONE);
+ 			return 0;
+ 		}
+ 
+@@ -478,12 +579,23 @@ int CUDPConnection::PacketReceived (CNetBuffer *pPacket,
+ 		    && !m_ForeignIP.IsBroadcast ()
+ 		    && m_ForeignIP != *m_pNetConfig->GetBroadcastAddress ())
+ 		{
++			UDPTraceDHCP ("skip-foreign-ip", rSenderIP, rReceiverIP,
++				      nSourcePort, nDestPort, nLength, m_nOwnPort,
++				      m_nForeignPort, m_bActiveOpen);
++			UDPLowDHCPPacket (BMX_DHCP_STAGE_UDP_DROP_FOREIGNIP, pHeader,
++					  nLength, rSenderIP, rReceiverIP,
++					  BMX_DHCP_REASON_NONE);
+ 			return 0;
+ 		}
+ 	}
+ 
+ 	if (nLength < be2le16 (pHeader->nLength))
+ 	{
++		UDPTraceDHCP ("drop-truncated", rSenderIP, rReceiverIP,
++			      nSourcePort, nDestPort, nLength, m_nOwnPort,
++			      m_nForeignPort, m_bActiveOpen);
++		UDPLowDHCPPacket (BMX_DHCP_STAGE_UDP_DROP_LENGTH, pHeader, nLength,
++				  rSenderIP, rReceiverIP, BMX_DHCP_REASON_SHORT);
+ 		delete pPacket;
+ 
+ 		return -1;
+@@ -496,6 +608,12 @@ int CUDPConnection::PacketReceived (CNetBuffer *pPacket,
+ 
+ 		if (m_Checksum.Calculate (pHeader, nLength) != CHECKSUM_OK)
+ 		{
++			UDPTraceDHCP ("drop-checksum", rSenderIP, rReceiverIP,
++				      nSourcePort, nDestPort, nLength, m_nOwnPort,
++				      m_nForeignPort, m_bActiveOpen);
++			UDPLowDHCPPacket (BMX_DHCP_STAGE_UDP_DROP_CHECKSUM, pHeader,
++					  nLength, rSenderIP, rReceiverIP,
++					  BMX_DHCP_REASON_NONE);
+ 			delete pPacket;
+ 
+ 			return -1;
+@@ -506,6 +624,11 @@ int CUDPConnection::PacketReceived (CNetBuffer *pPacket,
+ 	    && (   rReceiverIP.IsBroadcast ()
+ 	        || rReceiverIP == *m_pNetConfig->GetBroadcastAddress ()))
+ 	{
++		UDPTraceDHCP ("drop-broadcast-disabled", rSenderIP, rReceiverIP,
++			      nSourcePort, nDestPort, nLength, m_nOwnPort,
++			      m_nForeignPort, m_bActiveOpen);
++		UDPLowDHCPPacket (BMX_DHCP_STAGE_UDP_DROP_BCAST, pHeader, nLength,
++				  rSenderIP, rReceiverIP, BMX_DHCP_REASON_NONE);
+ 		delete pPacket;
+ 
+ 		return 1;
+@@ -515,15 +638,24 @@ int CUDPConnection::PacketReceived (CNetBuffer *pPacket,
+ 	    && (   m_pHostGroup == 0
+ 	        || *m_pHostGroup != rReceiverIP))
+ 	{
++		UDPTraceDHCP ("skip-multicast-group", rSenderIP, rReceiverIP,
++			      nSourcePort, nDestPort, nLength, m_nOwnPort,
++			      m_nForeignPort, m_bActiveOpen);
+ 		return 0;
+ 	}
+ 
++	UDPTraceDHCP ("accept", rSenderIP, rReceiverIP, nSourcePort, nDestPort,
++		      nLength, m_nOwnPort, m_nForeignPort, m_bActiveOpen);
++
+ 	pPacket->RemoveHeader (sizeof (TUDPHeader));
+ 
+ 	TUDPPrivateData Data;
+ 	rSenderIP.CopyTo (Data.SourceAddress);
+ 	Data.nSourcePort = nSourcePort;
+ 	pPacket->SetPrivateData (&Data, sizeof Data);
++	UDPLowDHCPPayload (BMX_DHCP_STAGE_UDP_ENQUEUE, pPacket->GetPtr (),
++			   pPacket->GetLength (), Data.SourceAddress,
++			   nSourcePort, m_nOwnPort, BMX_DHCP_REASON_NONE);
+ 
+ 	m_RxQueue.Enqueue (pPacket);
+ 

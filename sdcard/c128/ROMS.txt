@@ -1,0 +1,6 @@
+basiclo-318018-04.bin
+basichi-318019-04.bin
+basic64-901226-01.bin
+kernal64-901227-03.bin
+kernal-318020-05.bin
+chargen-390059-01.bin

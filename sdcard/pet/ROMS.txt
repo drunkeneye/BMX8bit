@@ -1,0 +1,4 @@
+basic-4.901465-23-20-21.bin
+characters-2.901447-10.bin
+kernal-4.901465-22.bin
+edit-4-80-b-50Hz.901474-04_.bin

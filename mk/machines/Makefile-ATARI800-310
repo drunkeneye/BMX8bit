@@ -1,0 +1,17 @@
+#
+# Makefile for an ATARI800 kernel using BMX
+#
+# The atari800 core is vendored under third_party/atari800 and compiled
+# directly by the main Makefile (BMC64_OBJS + pattern rules), so there are
+# no prebuilt VICE-style libraries to link.  This file only selects the
+# machine class and lets the main Makefile do the rest.
+#
+
+MACHINE_CLASS = RASPI_ATARI800
+
+# For now run the atari800 frame loop on core 1 like the other machines.
+BMX_EMU_MULTICORE ?= 1
+
+VICELIBS :=
+
+include Makefile

@@ -1,0 +1,137 @@
+# BMC64 keyboard mapping file suitable for both
+# USB and real C64 keyboards using GPIO
+#
+# A Keyboard map is read in as patch to the current map.
+#
+# File format:
+# - comment lines start with '#'
+# - keyword lines start with '!keyword'
+# - normal line has 'keysym/scancode row column shiftflag'
+#
+# Keywords and their lines are:
+# '!CLEAR'               clear whole table
+# '!INCLUDE filename'    read file as mapping file
+# '!LSHIFT row col'      left shift keyboard row/column
+# '!RSHIFT row col'      right shift keyboard row/column
+# '!VSHIFT shiftkey'     virtual shift key (RSHIFT or LSHIFT)
+# '!UNDEF keysym'        remove keysym from table
+#
+# Shiftflag can have the values:
+# 0      key is not shifted for this keysym/scancode
+# 1      key is shifted for this keysym/scancode
+# 2      left shift
+# 4      right shift
+# 8      key can be shifted or not with this keysym/scancode
+# 16     deshift key for this keysym/scancode
+# 32     another definition for this keysym/scancode follows
+#
+# Negative row values:
+# 'keysym -1 n' joystick #1, direction n
+# 'keysym -2 n' joystick #2, direction n
+# 'keysym -3 0' first RESTORE key
+# 'keysym -3 1' second RESTORE key
+# 'keysym -4 0' 40/80 column key
+# 'keysym -4 1' CAPS (ASCII/DIN) key
+#
+
+!CLEAR
+!LSHIFT 1 3
+!RSHIFT 6 4
+!VSHIFT RSHIFT
+!SHIFTL LSHIFT
+!LCBM 0 5
+!VCBM LCBM
+!LCTRL 0 2
+!VCTRL LCTRL
+
+Tab 0 2 16392       /* CTRL */
+Control_L 0 5 8200  /* Commodore Key */
+Alt_L 0 5 8200      /* Commodore Key */
+BackSpace 7 0 8
+Down 7 3 8
+Escape 0 3 8    /* Run Stop */
+F1 7 4 8
+F2 7 4 1
+F3 7 5 8
+F4 7 5 1
+F5 7 6 8
+F6 7 6 1
+F7 7 7 8
+F8 7 7 1
+Home 6 7 8      /* Clr */
+Left 7 2 1
+Return 7 1 8
+Right 7 2 8
+Shift_L 1 3 2
+Shift_R 6 4 4
+Up 7 3 1
+
+# Generated from C64 positional US reference.
+LeftBracket 5 5 33  # bracketleft
+LeftBracket 5 6 144  # at
+SemiColon 6 2 32  # semicolon
+SemiColon 5 5 144  # colon
+Comma 5 3 0  # comma
+BackSlash 6 0 0  # backslash
+Equals 6 5 32  # equal
+Equals 5 0 144  # plus
+Period 5 4 0  # period
+Dash 5 7 32  # minus
+Dash 5 6 2192  # underscore
+SingleQuote 3 0 33  # apostrophe
+SingleQuote 0 7 129  # quotedbl
+Slash 6 3 0  # slash
+Space 0 4 8  # space
+Insert 6 0 0  # sterling
+RightBracket 6 2 33  # bracketright
+RightBracket 6 1 144  # asterisk
+0 4 7 32  # 0
+0 4 0 129  # parenright
+1 0 0 32  # 1
+1 0 0 129  # exclam
+2 0 7 32  # 2
+2 5 6 144  # at
+3 1 0 32  # 3
+3 1 0 129  # numbersign
+4 1 7 32  # 4
+4 1 7 129  # dollar
+5 2 0 32  # 5
+5 2 0 129  # percent
+6 2 7 32  # 6
+6 6 6 144  # asciicircum
+7 3 0 32  # 7
+7 2 7 129  # ampersand
+8 3 7 32  # 8
+8 6 1 144  # asterisk
+9 4 0 32  # 9
+9 3 7 129  # parenleft
+a 1 2 8  # a
+b 3 4 8  # b
+c 2 4 8  # c
+d 2 2 8  # d
+e 1 6 8  # e
+f 2 5 8  # f
+g 3 2 8  # g
+h 3 5 8  # h
+i 4 1 8  # i
+j 4 2 8  # j
+k 4 5 8  # k
+l 5 2 8  # l
+m 4 4 8  # m
+n 4 3 8  # n
+o 4 6 8  # o
+p 5 1 8  # p
+q 0 6 8  # q
+r 2 1 8  # r
+s 1 5 8  # s
+t 2 6 8  # t
+u 3 6 8  # u
+v 3 3 8  # v
+w 1 1 8  # w
+x 2 3 8  # x
+y 3 1 8  # y
+z 1 4 8  # z
+
+# Restore key mappings
+PageUp -3 0
+CapsLock 1 3 64

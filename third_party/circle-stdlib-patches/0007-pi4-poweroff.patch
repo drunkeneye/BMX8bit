@@ -1,0 +1,94 @@
+--- a/libs/circle/include/circle/startup.h
++++ b/libs/circle/include/circle/startup.h
+@@ -31,7 +31,7 @@
+ int main (void);
+ #define EXIT_HALT	0
+ #define EXIT_REBOOT	1
+-#if RASPPI >= 5
++#if RASPPI >= 4
+ #define EXIT_POWER_OFF	2
+ #endif
+ 
+@@ -41,9 +41,11 @@
+ void error_halt (unsigned errnum) NORETURN;
+ void reboot (void) NORETURN;
+ 
+-#if RASPPI >= 5
++#if RASPPI >= 4
+ void poweroff (void) NORETURN;
++#endif
+ 
++#if RASPPI >= 5
+ boolean is_power_button_pressed (void);
+ #endif
+ 
+--- a/libs/circle/lib/sysinit.cpp
++++ b/libs/circle/lib/sysinit.cpp
+@@ -188,7 +188,7 @@
+ 	DisableFIQs ();
+ #endif
+ 
+-#if RASPPI >= 5 && defined (POWER_OFF_ON_HALT)
++#if RASPPI >= 4 && defined (POWER_OFF_ON_HALT)
+ #ifdef ARM_ALLOW_MULTI_CORE
+ 	if (nCore == 0)
+ #endif
+@@ -240,10 +240,27 @@
+ 	for (;;);					// wait for reset
+ }
+ 
+-#if RASPPI >= 5
++#if RASPPI >= 4
+ 
+ void poweroff (void)
+ {
++#if RASPPI == 4
++	PeripheralEntry ();
++
++	// Partition 63 tells the Raspberry Pi bootloader to enter HALT instead
++	// of loading another kernel after the watchdog reset.
++	u32 nRSTS = read32 (ARM_PM_RSTS);
++	nRSTS &= ARM_PM_RSTS_PART_CLEAR;
++	nRSTS |= ARM_PM_PASSWD | 0x555;
++	write32 (ARM_PM_RSTS, nRSTS);
++
++	write32 (ARM_PM_WDOG, ARM_PM_PASSWD | 10);
++
++	u32 nRSTC = read32 (ARM_PM_RSTC);
++	nRSTC &= ARM_PM_RSTC_CLEAR;
++	nRSTC |= ARM_PM_PASSWD | ARM_PM_RSTC_REBOOT;
++	write32 (ARM_PM_RSTC, nRSTC);
++#else
+ 	asm volatile
+ 	(
+ 		"mov	x0, %0\n"
+@@ -251,10 +268,12 @@
+ 
+ 		:: "r" (0x84000008UL)			// function code SYSTEM_OFF
+ 	);
++#endif
+ 
+ 	for (;;);
+ }
+ 
++#if RASPPI >= 5
+ boolean is_power_button_pressed (void)
+ {
+ 	boolean bResult = !(read32 (ARM_GPIO1_DATA0) & BIT (20));
+@@ -276,6 +295,7 @@
+ 
+ 	return bResult;
+ }
++#endif
+ 
+ #endif
+ 
+@@ -410,7 +430,7 @@
+ 
+ 		reboot ();
+ 	}
+-#if RASPPI >= 5
++#if RASPPI >= 4
+ 	else if (nResult == EXIT_POWER_OFF)
+ 	{
+ 		poweroff ();

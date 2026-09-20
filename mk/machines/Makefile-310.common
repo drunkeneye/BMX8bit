@@ -1,0 +1,65 @@
+#
+# Shared VICE 3.10 variables for machine kernel Makefiles.
+#
+
+VICE ?= third_party/vice-3.10/src
+RESID_IMPL ?= $(VICE)/resid/libresid.a
+
+VICE310_CORE_OBJS := \
+	$(VICE)/alarm.o \
+	$(VICE)/attach.o \
+	$(VICE)/autostart.o \
+	$(VICE)/autostart-prg.o \
+	$(VICE)/cbmdos.o \
+	$(VICE)/cbmimage.o \
+	$(VICE)/charset.o \
+	$(VICE)/clipboard.o \
+	$(VICE)/cmdline.o \
+	$(VICE)/color.o \
+	$(VICE)/crc32.o \
+	$(VICE)/crt.o \
+	$(VICE)/debug.o \
+	$(VICE)/dma.o \
+	$(VICE)/event.o \
+	$(VICE)/findpath.o \
+	$(VICE)/fliplist.o \
+	$(VICE)/gcr.o \
+	$(VICE)/info.o \
+	$(VICE)/init.o \
+	$(VICE)/initcmdline.o \
+	$(VICE)/interrupt.o \
+	$(VICE)/kbdbuf.o \
+	$(VICE)/keyboard.o \
+	$(VICE)/keymap.o \
+	$(VICE)/lib.o \
+	$(VICE)/log.o \
+	$(VICE)/machine-bus.o \
+	$(VICE)/machine.o \
+	$(VICE)/main.o \
+	$(VICE)/mainlock.o \
+	$(VICE)/m3u.o \
+	$(VICE)/network.o \
+	$(VICE)/opencbmlib.o \
+	$(VICE)/palette.o \
+	$(VICE)/profiler.o \
+	$(VICE)/ram.o \
+	$(VICE)/rawfile.o \
+	$(VICE)/rawnet.o \
+	$(VICE)/resources.o \
+	$(VICE)/romset.o \
+	$(VICE)/screenshot.o \
+	$(VICE)/sha1.o \
+	$(VICE)/snapshot.o \
+	$(VICE)/socket.o \
+	$(VICE)/sound.o \
+	$(VICE)/sysfile.o \
+	$(VICE)/traps.o \
+	$(VICE)/util.o \
+	$(VICE)/vicefeatures.o \
+	$(VICE)/vsync.o \
+	$(VICE)/zfile.o \
+	$(VICE)/zipcode.o
+
+VICE310_RESID_LIBS := \
+	$(RESID_IMPL) \
+	$(VICE)/hvsc/libhvsc.a

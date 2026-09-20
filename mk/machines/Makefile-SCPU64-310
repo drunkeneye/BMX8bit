@@ -1,0 +1,58 @@
+#
+# Makefile for an SCPU64 kernel using VICE 3.10
+#
+
+MACHINE_CLASS = RASPI_SCPU64
+
+include mk/machines/Makefile-310.common
+
+VICELIBS := \
+	$(VICE310_CORE_OBJS) \
+	$(VICE)/midi.o \
+	$(VICE)/scpu64/libscpu64.a \
+	$(VICE)/c64/cart/libc64cartsystem.a \
+	$(VICE)/c64/cart/libc64cart.a \
+	$(VICE)/c64/cart/libc64commoncart.a \
+	$(VICE)/scpu64/libscpu64stubs.a \
+	$(VICE)/c64/libc64scpu64.a \
+	$(VICE)/datasette/libdatasette.a \
+	$(VICE)/drive/iec/libdriveiec.a \
+	$(VICE)/drive/iecieee/libdriveiecieee.a \
+	$(VICE)/drive/iec/c64exp/libdriveiecc64exp.a \
+	$(VICE)/drive/ieee/libdriveieee.a \
+	$(VICE)/drive/libdrive.a \
+	$(VICE)/drive/tcbm/libdrivetcbm.a \
+	$(VICE)/lib/p64/libp64.a \
+	$(VICE)/iecbus/libiecbus.a \
+	$(VICE)/parallel/libparallel.a \
+	$(VICE)/vdrive/libvdrive.a \
+	$(VICE)/sid/libsid.a \
+	$(VICE)/monitor/libmonitor.a \
+	$(VICE)/joyport/libjoyport.a \
+	$(VICE)/samplerdrv/libsamplerdrv.a \
+	$(VICE)/arch/shared/sounddrv/libsounddrv.a \
+	$(VICE)/arch/shared/mididrv/libmididrv.a \
+	$(VICE)/arch/shared/socketdrv/libsocketdrv.a \
+	$(VICE)/arch/shared/hwsiddrv/libhwsiddrv.a \
+	$(VICE)/gfxoutputdrv/libgfxoutputdrv.a \
+	$(VICE)/printerdrv/libprinterdrv.a \
+	$(VICE)/diskimage/libdiskimage.a \
+	$(VICE)/fsdevice/libfsdevice.a \
+	$(VICE)/tape/libtape.a \
+	$(VICE)/fileio/libfileio.a \
+	$(VICE)/serial/libserial.a \
+	$(VICE)/core/libcore.a \
+	$(VICE)/rs232drv/librs232drv.a \
+	$(VICE)/viciisc/libviciisc.a \
+	$(VICE)/raster/libraster.a \
+	$(VICE)/userport/libuserport.a \
+	$(VICE)/diag/libdiag.a \
+	$(VICE)/core/rtc/librtc.a \
+	$(VICE)/video/libvideo.a \
+	$(VICE)/arch/raspi/libarch.a \
+	$(VICE)/imagecontents/libimagecontents.a \
+	$(VICE310_RESID_LIBS) \
+	$(VICE)/arch/raspi/libarch.a \
+	$(VICE)/arch/raspi/c64/libarch_c64.a
+
+include Makefile

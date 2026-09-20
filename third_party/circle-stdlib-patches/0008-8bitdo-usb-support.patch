@@ -1,0 +1,1477 @@
+diff --git a/libs/circle/include/circle/usb/usb8bitdov1.h b/libs/circle/include/circle/usb/usb8bitdov1.h
+new file mode 100644
+index 00000000..6e44d6e7
+--- /dev/null
++++ b/libs/circle/include/circle/usb/usb8bitdov1.h
+@@ -0,0 +1,18 @@
++//
++// usb8bitdov1.h
++//
++// Exact identity helper for the original 8BitDo Wireless Adapter V1.
++//
++#ifndef _circle_usb_usb8bitdov1_h
++#define _circle_usb_usb8bitdov1_h
++
++#include <circle/types.h>
++
++inline boolean IsUSB8BitDoV1Receiver (u16 usVendor, u16 usProduct, u16 usRevision)
++{
++	return   usVendor == 0x045E
++	      && usProduct == 0x028E
++	      && usRevision == 0x0120;
++}
++
++#endif
+diff --git a/libs/circle/include/circle/usb/usbgamepad.h b/libs/circle/include/circle/usb/usbgamepad.h
+index 8d4b88eb..0c66f725 100644
+--- a/libs/circle/include/circle/usb/usbgamepad.h
++++ b/libs/circle/include/circle/usb/usbgamepad.h
+@@ -217,6 +217,11 @@ private:
+ 	virtual void DecodeReport (const u8 *pReportBuffer) = 0;
+ 
+ protected:
++	// Remove this gamepad from the device-name service without destroying it.
++	// This is used by receiver bootstrap personalities which have to complete
++	// configuration, but must not be exposed as an input device.
++	void UnregisterDevice (void);
++
+ 	TGamePadState m_State;
+ 	TGamePadStatusHandler *m_pStatusHandler;
+ 
+diff --git a/libs/circle/include/circle/usb/usbgamepad8bitdo.h b/libs/circle/include/circle/usb/usbgamepad8bitdo.h
+new file mode 100644
+index 00000000..eec10a32
+--- /dev/null
++++ b/libs/circle/include/circle/usb/usbgamepad8bitdo.h
+@@ -0,0 +1,53 @@
++//
++// usbgamepad8bitdo.h
++//
++// Circle - A C++ bare metal environment for Raspberry Pi
++// Copyright (C) 2026  R. Stange <rsta2@o2online.de>
++//
++// This program is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// This program is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with this program.  If not, see <http://www.gnu.org/licenses/>.
++//
++#ifndef _circle_usb_usbgamepad8bitdo_h
++#define _circle_usb_usbgamepad8bitdo_h
++
++#include <circle/usb/usbgamepad.h>
++#include <circle/types.h>
++
++// Shared protocol support for 8BitDo receivers which expose Xbox/XUSB-style
++// input reports with a 0x1400 header. This is not a generic base for 8BitDo
++// HID, Switch-mode or keyboard devices.
++class CUSBGamePad8BitDoDevice : public CUSBGamePadDevice
++{
++public:
++	CUSBGamePad8BitDoDevice (CUSBFunction *pFunction);
++	~CUSBGamePad8BitDoDevice (void);
++
++	boolean Configure (void);
++
++	unsigned GetProperties (void)
++	{
++		return   GamePadPropertyIsKnown
++		       | GamePadPropertyHasRumble;
++	}
++
++	boolean SetRumbleMode (TGamePadRumbleMode Mode);
++
++private:
++	void ReportHandler (const u8 *pReport, unsigned nReportSize);
++	void DecodeReport (const u8 *pReport);
++
++private:
++	boolean m_bInputSeen;
++};
++
++#endif
+diff --git a/libs/circle/include/circle/usb/usbgamepad8bitdoum2.h b/libs/circle/include/circle/usb/usbgamepad8bitdoum2.h
+new file mode 100644
+index 00000000..91382143
+--- /dev/null
++++ b/libs/circle/include/circle/usb/usbgamepad8bitdoum2.h
+@@ -0,0 +1,45 @@
++//
++// usbgamepad8bitdoum2.h
++//
++// Circle - A C++ bare metal environment for Raspberry Pi
++// Copyright (C) 2026  R. Stange <rsta2@o2online.de>
++//
++// This program is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// This program is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with this program.  If not, see <http://www.gnu.org/licenses/>.
++//
++#ifndef _circle_usb_usbgamepad8bitdoum2_h
++#define _circle_usb_usbgamepad8bitdoum2_h
++
++#include <circle/usb/usbgamepad8bitdo.h>
++#include <circle/types.h>
++
++// 8BitDo Ultimate 2 receiver runtime personality (2dc8:310b). The receiver
++// exposes its gamepad transport on the vendor-specific XInput interface
++// FF/5D/01. Its auxiliary HID interfaces are deliberately handled by the
++// device factory and are not part of this driver.
++class CUSBGamePad8BitDoUM2Device : public CUSBGamePad8BitDoDevice
++{
++public:
++	CUSBGamePad8BitDoUM2Device (CUSBFunction *pFunction);
++	~CUSBGamePad8BitDoUM2Device (void);
++
++	boolean Configure (void);
++
++private:
++	int SendXInputMagicControl (void);
++
++private:
++	boolean m_bInterfaceOK;
++};
++
++#endif
+diff --git a/libs/circle/include/circle/usb/usbgamepad8bitdoxinput.h b/libs/circle/include/circle/usb/usbgamepad8bitdoxinput.h
+new file mode 100644
+index 00000000..2efd15ea
+--- /dev/null
++++ b/libs/circle/include/circle/usb/usbgamepad8bitdoxinput.h
+@@ -0,0 +1,48 @@
++//
++// usbgamepad8bitdoxinput.h
++//
++// Circle - A C++ bare metal environment for Raspberry Pi
++// Copyright (C) 2026  R. Stange <rsta2@o2online.de>
++//
++// This program is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// This program is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with this program.  If not, see <http://www.gnu.org/licenses/>.
++//
++#ifndef _circle_usb_usbgamepad8bitdoxinput_h
++#define _circle_usb_usbgamepad8bitdoxinput_h
++
++#include <circle/usb/usbgamepad8bitdo.h>
++#include <circle/types.h>
++
++class CUSBGamePad8BitDoXInputDevice : public CUSBGamePad8BitDoDevice
++{
++public:
++	CUSBGamePad8BitDoXInputDevice (CUSBFunction *pFunction);
++	~CUSBGamePad8BitDoXInputDevice (void);
++
++	boolean Configure (void);
++
++	unsigned GetProperties (void)
++	{
++		return   GamePadPropertyIsKnown
++		       | GamePadPropertyHasLED
++		       | GamePadPropertyHasRumble;
++	}
++
++	boolean SetLEDMode (TGamePadLEDMode Mode);
++
++private:
++	boolean StartXInput (void);
++	int SendXInputMagicControl (void);
++};
++
++#endif
+diff --git a/libs/circle/include/circle/usb/usbkeyboard.h b/libs/circle/include/circle/usb/usbkeyboard.h
+index 373b0d26..3c26d61d 100644
+--- a/libs/circle/include/circle/usb/usbkeyboard.h
++++ b/libs/circle/include/circle/usb/usbkeyboard.h
+@@ -62,9 +62,13 @@ public:
+ 	// works in cooked and raw mode
+ 	boolean SetLEDs (u8 ucStatus);		// must not be called in interrupt context
+ 
+-private:
++
++protected:
++	boolean ConfigureKeyboard (unsigned nReportSize);
+ 	void ReportHandler (const u8 *pReport, unsigned nReportSize);
+ 
++
++private:
+ 	static boolean FindByte (const u8 *pBuffer, u8 ucByte, unsigned nLength);
+ 
+ private:
+diff --git a/libs/circle/include/circle/usb/usbkeyboard8bitdo.h b/libs/circle/include/circle/usb/usbkeyboard8bitdo.h
+new file mode 100644
+index 00000000..f20229ef
+--- /dev/null
++++ b/libs/circle/include/circle/usb/usbkeyboard8bitdo.h
+@@ -0,0 +1,37 @@
++//
++// usbkeyboard8bitdo.h
++//
++// Circle - A C++ bare metal environment for Raspberry Pi
++// Copyright (C) 2014-2026  R. Stange <rsta2@o2online.de>
++// 
++// This program is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// This program is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with this program.  If not, see <http://www.gnu.org/licenses/>.
++//
++#ifndef _circle_usb_usbkeyboard8bitdo_h
++#define _circle_usb_usbkeyboard8bitdo_h
++
++#include <circle/usb/usbkeyboard.h>
++
++class CUSBKeyboard8BitDoDevice : public CUSBKeyboardDevice
++{
++public:
++	CUSBKeyboard8BitDoDevice (CUSBFunction *pFunction);
++	~CUSBKeyboard8BitDoDevice (void);
++
++	boolean Configure (void);
++
++protected:
++	void ReportHandler (const u8 *pReport, unsigned nReportSize);
++};
++
++#endif
+\ No newline at end of file
+diff --git a/libs/circle/include/circle/usb/usbstandardhub.h b/libs/circle/include/circle/usb/usbstandardhub.h
+index 33a07337..5205c0bd 100644
+--- a/libs/circle/include/circle/usb/usbstandardhub.h
++++ b/libs/circle/include/circle/usb/usbstandardhub.h
+@@ -49,6 +49,8 @@ public:
+ 
+ private:
+ 	boolean EnumeratePorts (void);
++	boolean DebouncePort (unsigned nPortIndex);
++	void DetachDeviceAt (unsigned nPortIndex);
+ 
+ 	boolean StartStatusChangeRequest (void);
+ 	void CompletionRoutine (CUSBRequest *pURB);
+diff --git a/libs/circle/include/circle/usb/xhci.h b/libs/circle/include/circle/usb/xhci.h
+index 400146ef..0ee66b68 100644
+--- a/libs/circle/include/circle/usb/xhci.h
++++ b/libs/circle/include/circle/usb/xhci.h
+@@ -325,6 +325,8 @@ PACKED;
+ 
+ // TRB Completion Codes
+ #define XHCI_TRB_COMPLETION_CODE_SUCCESS			1
++#define XHCI_TRB_COMPLETION_CODE_USB_TRANSACTION_ERROR		4
++#define XHCI_TRB_COMPLETION_CODE_SPLIT_TRANSACTION_ERROR	36
+ #define XHCI_TRB_COMPLETION_CODE_NO_SLOTS_AVAILABLE_ERROR	9
+ #define XHCI_TRB_COMPLETION_CODE_SHORT_PACKET			13
+ #define XHCI_TRB_COMPLETION_CODE_RING_UNDERRUN			14
+diff --git a/libs/circle/lib/usb/Makefile b/libs/circle/lib/usb/Makefile
+index 14471753..6f41e495 100644
+--- a/libs/circle/lib/usb/Makefile
++++ b/libs/circle/lib/usb/Makefile
+@@ -26,9 +26,10 @@ include $(CIRCLEHOME)/Rules.mk
+ 
+ OBJS	= lan7800.o smsc951x.o usbbluetooth.o usbcdcethernet.o usbfloppydevice.o \
+ 	  usbconfigparser.o usbdevice.o usbdevicefactory.o usbendpoint.o usbfunction.o \
+-	  usbgamepad.o usbgamepadps3.o usbgamepadps4.o usbgamepadstandard.o usbgamepadswitchpro.o \
+-	  usbgamepadxbox360.o usbgamepadxboxone.o usbhiddevice.o usbhostcontroller.o \
+-	  usbkeyboard.o usbmassdevice.o usbmidi.o usbmidihost.o usbmouse.o usbprinter.o usbrequest.o \
++	  usbgamepad.o usbgamepad8bitdo.o usbgamepad8bitdoum2.o usbgamepad8bitdoxinput.o usbgamepadps3.o usbgamepadps4.o usbgamepadstandard.o \
++	  usbgamepadswitchpro.o usbgamepadxbox360.o usbgamepadxboxone.o \
++	  usbhiddevice.o usbhostcontroller.o \
++	  usbkeyboard.o usbkeyboard8bitdo.o usbmassdevice.o usbmidi.o usbmidihost.o usbmouse.o usbprinter.o usbrequest.o \
+ 	  usbstandardhub.o usbstring.o usbserial.o usbserialhost.o usbserialch341.o usbserialcp210x.o \
+ 	  usbserialpl2303.o usbserialft231x.o usbserialcdc.o usbtouchscreen.o dwhciregister.o
+ 
+diff --git a/libs/circle/lib/usb/usbdevice.cpp b/libs/circle/lib/usb/usbdevice.cpp
+index dbc710c3..8b4f207b 100644
+--- a/libs/circle/lib/usb/usbdevice.cpp
++++ b/libs/circle/lib/usb/usbdevice.cpp
+@@ -24,6 +24,7 @@
+ #include <circle/usb/usbendpoint.h>
+ #include <circle/usb/usbdevicefactory.h>
+ #include <circle/usb/usbstring.h>
++#include <circle/usb/usb8bitdov1.h>
+ #include <circle/usb/xhci.h>
+ #include <circle/util.h>
+ #include <circle/sysconfig.h>
+@@ -364,7 +365,15 @@ boolean CUSBDevice::Initialize (void)
+ 	}
+ 
+ 	CString SerialNumber;
+-	if (   m_pDeviceDesc->iSerialNumber != 0
++	const boolean bSkipSerialNumber =
++		IsUSB8BitDoV1Receiver (m_pDeviceDesc->idVendor,
++				      m_pDeviceDesc->idProduct,
++				      m_pDeviceDesc->bcdDevice);
++	if (bSkipSerialNumber)
++	{
++		LogWrite (LogNotice, "Skipping broken serial descriptor for 8BitDo V1 receiver");
++	}
++	else if (   m_pDeviceDesc->iSerialNumber != 0
+ 	    && m_pDeviceDesc->iSerialNumber != 0xFF
+ 	    && USBString.GetFromDescriptor (m_pDeviceDesc->iSerialNumber, USBString.GetLanguageID ()))
+ 	{
+diff --git a/libs/circle/lib/usb/usbdevicefactory.cpp b/libs/circle/lib/usb/usbdevicefactory.cpp
+index 75210581..d41e38db 100644
+--- a/libs/circle/lib/usb/usbdevicefactory.cpp
++++ b/libs/circle/lib/usb/usbdevicefactory.cpp
+@@ -30,10 +30,13 @@
+ #include <circle/usb/usbmassdevice.h>
+ #include <circle/usb/usbfloppydevice.h>
+ #include <circle/usb/usbkeyboard.h>
++#include <circle/usb/usbkeyboard8bitdo.h>
+ #include <circle/usb/usbmouse.h>
+ #include <circle/usb/usbgamepadstandard.h>
+ #include <circle/usb/usbgamepadps3.h>
+ #include <circle/usb/usbgamepadps4.h>
++#include <circle/usb/usbgamepad8bitdoum2.h>
++#include <circle/usb/usbgamepad8bitdoxinput.h>
+ #include <circle/usb/usbgamepadxbox360.h>
+ #include <circle/usb/usbgamepadxboxone.h>
+ #include <circle/usb/usbgamepadswitchpro.h>
+@@ -91,7 +94,22 @@ CUSBFunction *CUSBDeviceFactory::GetDevice (CUSBFunction *pParent, CString *pNam
+ 		CString *pVendor = pParent->GetDevice ()->GetName (DeviceNameVendor);
+ 		assert (pVendor != 0);
+ 
+-		if (pVendor->Compare ("ven3f0-1198") != 0)	// HP USB 1000dpi Laser Mouse
++		if (pVendor->Compare ("ven2dc8-310b") == 0)
++		{
++			// The UM2 boot-keyboard interface stalls SET_PROTOCOL. Keep it
++			// configured without binding the generic keyboard driver; the
++			// vendor-specific interface carries the controller state.
++			pParent->GetDevice ()->LogWrite (LogNotice,
++							 "Keeping UM2 auxiliary HID interface %u passive",
++							 (unsigned) pParent->GetInterfaceNumber ());
++			pResult = new CUSBFunction (pParent);
++		}
++		else if (   pVendor->Compare ("ven2dc8-5200") == 0
++		    || pVendor->Compare ("ven2dc8-5201") == 0)
++		{
++			pResult = new CUSBKeyboard8BitDoDevice (pParent);
++		}
++		else if (pVendor->Compare ("ven3f0-1198") != 0)	// HP USB 1000dpi Laser Mouse
+ 		{
+ 			pResult = new CUSBKeyboardDevice (pParent);
+ 		}
+@@ -112,7 +130,16 @@ CUSBFunction *CUSBDeviceFactory::GetDevice (CUSBFunction *pParent, CString *pNam
+ 		CString *pVendor = pParent->GetDevice ()->GetName (DeviceNameVendor);
+ 		assert (pVendor != 0);
+ 
+-		if (pVendor->Compare ("ven5ac-21e") != 0)	// Apple Aluminum Mini Keyboard
++		if (pVendor->Compare ("ven2dc8-310b") == 0)
++		{
++			// Do not fetch or initialize the UM2 auxiliary HID report
++			// descriptor until its extra controls are implemented explicitly.
++			pParent->GetDevice ()->LogWrite (LogNotice,
++							 "Keeping UM2 auxiliary HID interface %u passive",
++							 (unsigned) pParent->GetInterfaceNumber ());
++			pResult = new CUSBFunction (pParent);
++		}
++		else if (pVendor->Compare ("ven5ac-21e") != 0)	// Apple Aluminum Mini Keyboard
+ 		{
+ 			pResult = GetGenericHIDDevice (pParent);
+ 		}
+@@ -134,6 +161,33 @@ CUSBFunction *CUSBDeviceFactory::GetDevice (CUSBFunction *pParent, CString *pNam
+ 	{
+ 		pResult = new CUSBGamePadXbox360Device (pParent);
+ 	}
++	else if (pName->Compare ("ven2dc8-3106") == 0)	// 8BitDo XInput receiver
++	{
++		pResult = new CUSBGamePad8BitDoXInputDevice (pParent);
++	}
++	else if (pName->Compare ("ven2dc8-3107") == 0)	// 8BitDo idle receiver
++	{
++		// The receiver exposes a non-gamepad HID personality while no
++		// controller is paired. Keep it configured so Plug&Play can observe
++		// the next mode switch, but do not publish a phantom gamepad.
++		pResult = new CUSBFunction (pParent);
++	}
++	else if (pName->Compare ("ven2dc8-3016") == 0)	// 8BitDo Ultimate C idle receiver
++	{
++		// Keep the idle personality configured so Plug&Play can observe
++		// the switch to the 3106 runtime personality.
++		pResult = new CUSBFunction (pParent);
++	}
++	else if (pName->Compare ("ven2dc8-3109") == 0)	// 8BitDo UM2 idle receiver
++	{
++		// Keep the management-only personality configured so Plug&Play can
++		// observe the switch to the 310b runtime personality.
++		pResult = new CUSBFunction (pParent);
++	}
++	else if (pName->Compare ("ven2dc8-310b") == 0)	// 8BitDo UM2 runtime receiver
++	{
++		pResult = new CUSBGamePad8BitDoUM2Device (pParent);
++	}
+ 	else if (   pName->Compare ("ven45e-2d1") == 0		// XBox One Controller
+ 		 || pName->Compare ("ven45e-2dd") == 0		// XBox One Controller (FW 2015)
+ 		 || pName->Compare ("ven45e-2e3") == 0		// XBox One Elite Controller
+diff --git a/libs/circle/lib/usb/usbgamepad.cpp b/libs/circle/lib/usb/usbgamepad.cpp
+index f423357f..911a5a1d 100644
+--- a/libs/circle/lib/usb/usbgamepad.cpp
++++ b/libs/circle/lib/usb/usbgamepad.cpp
+@@ -45,11 +45,17 @@ CUSBGamePadDevice::~CUSBGamePadDevice (void)
+ {
+ 	m_pStatusHandler = 0;
+ 
++	UnregisterDevice ();
++}
++
++void CUSBGamePadDevice::UnregisterDevice (void)
++{
+ 	if (m_nDeviceNumber != 0)
+ 	{
+ 		CDeviceNameService::Get ()->RemoveDevice (DevicePrefix, m_nDeviceNumber, FALSE);
+ 
+ 		s_DeviceNumberPool.FreeNumber (m_nDeviceNumber);
++		m_nDeviceNumber = 0;
+ 	}
+ }
+ 
+diff --git a/libs/circle/lib/usb/usbgamepad8bitdo.cpp b/libs/circle/lib/usb/usbgamepad8bitdo.cpp
+new file mode 100644
+index 00000000..09d8384f
+--- /dev/null
++++ b/libs/circle/lib/usb/usbgamepad8bitdo.cpp
+@@ -0,0 +1,235 @@
++//
++// usbgamepad8bitdo.cpp
++//
++// Circle - A C++ bare metal environment for Raspberry Pi
++// Copyright (C) 2018-2026  R. Stange <rsta2@o2online.de>
++//
++// Information to implement this was taken from:
++//	https://github.com/felis/USB_Host_Shield_2.0/blob/master/XBOXUSB.cpp
++//	Copyright (C) 2012 Kristian Lauszus, TKJ Electronics. All rights reserved.
++//	Licensed under GPLv2
++//
++// This program is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// This program is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with this program.  If not, see <http://www.gnu.org/licenses/>.
++//
++#include <circle/usb/usbgamepad8bitdo.h>
++#include <circle/synchronize.h>
++#include <circle/logger.h>
++#include <circle/util.h>
++#include <circle/macros.h>
++#include <circle/debug.h>
++#include <assert.h>
++
++struct T8BitDoXInputReport
++{
++	u16	Header;
++#define REPORT_HEADER			0x1400
++
++	u16	Buttons;
++#define REPORT_BUTTONS			16
++
++#define REPORT_ANALOG_BUTTONS		2
++	u8	AnalogButton[REPORT_ANALOG_BUTTONS];
++#define REPORT_ANALOG_BUTTON_MINIMUM	0
++#define REPORT_ANALOG_BUTTON_THRESHOLD	128
++#define REPORT_ANALOG_BUTTON_MAXIMUM	255
++
++#define REPORT_AXES			4
++	s16	Axes[REPORT_AXES];
++#define REPORT_AXES_MINIMUM		(-32768)
++#define REPORT_AXES_MAXIMUM		32767
++}
++PACKED;
++
++// XUSB input reports contain 14 bytes of controller state. Linux xpad uses a
++// 64-byte input buffer, because wired controllers may return transfers larger
++// than one interrupt endpoint packet. Wireless receivers normally complete
++// these requests with a shorter 20-byte report.
++#define REPORT_DATA_SIZE	sizeof (T8BitDoXInputReport)
++#define REPORT_BUFFER_SIZE	64
++
++static const char FromUSBPad8BitDo[] = "usbpad8bitdo";
++
++CUSBGamePad8BitDoDevice::CUSBGamePad8BitDoDevice (CUSBFunction *pFunction)
++:	CUSBGamePadDevice (pFunction),
++	m_bInputSeen (FALSE)
++{
++}
++
++CUSBGamePad8BitDoDevice::~CUSBGamePad8BitDoDevice (void)
++{
++}
++
++boolean CUSBGamePad8BitDoDevice::Configure (void)
++{
++	m_usReportSize = REPORT_BUFFER_SIZE;
++	CLogger::Get ()->Write (FromUSBPad8BitDo, LogNotice,
++			      "Using %u-byte XInput input buffer (%u-byte state)",
++			      (unsigned) REPORT_BUFFER_SIZE, (unsigned) REPORT_DATA_SIZE);
++
++	if (!CUSBGamePadDevice::Configure ())
++	{
++		CLogger::Get ()->Write (FromUSBPad8BitDo, LogError,
++				      "Cannot configure gamepad device");
++
++		return FALSE;
++	}
++
++	m_State.nbuttons = GAMEPAD_BUTTONS_STANDARD;
++	m_State.naxes = REPORT_AXES+REPORT_ANALOG_BUTTONS;
++	for (unsigned i = 0; i < REPORT_AXES; i++)
++	{
++		m_State.axes[i].minimum = GAMEPAD_AXIS_DEFAULT_MINIMUM;
++		m_State.axes[i].maximum = GAMEPAD_AXIS_DEFAULT_MAXIMUM;
++	}
++	for (unsigned i = 0; i < REPORT_ANALOG_BUTTONS; i++)
++	{
++		m_State.axes[REPORT_AXES+i].minimum = REPORT_ANALOG_BUTTON_MINIMUM;
++		m_State.axes[REPORT_AXES+i].maximum = REPORT_ANALOG_BUTTON_MAXIMUM;
++	}
++	m_State.nhats = 0;
++
++	return TRUE;
++}
++
++void CUSBGamePad8BitDoDevice::ReportHandler (const u8 *pReport, unsigned nReportSize)
++{
++	if (   pReport != 0
++	    && nReportSize >= REPORT_DATA_SIZE
++	    && pReport[0] == (REPORT_HEADER & 0xFF)
++	    && pReport[1] == (REPORT_HEADER >> 8))
++	{
++		if (!m_bInputSeen)
++		{
++			CLogger::Get ()->Write (FromUSBPad8BitDo, LogNotice,
++					      "First XInput report received (%u bytes)",
++					      nReportSize);
++			m_bInputSeen = TRUE;
++		}
++
++		if (m_pStatusHandler == 0)
++		{
++			return;
++		}
++
++		//debug_hexdump (pReport, m_usReportSize, FromUSBPad8BitDo);
++
++		DecodeReport (pReport);
++
++		(*m_pStatusHandler) (m_nDeviceNumber-1, &m_State);
++	}
++}
++
++void CUSBGamePad8BitDoDevice::DecodeReport (const u8 *pReportBuffer)
++{
++	const T8BitDoXInputReport *pReport =
++		reinterpret_cast<const T8BitDoXInputReport *> (pReportBuffer);
++	assert (pReport != 0);
++	assert (pReport->Header == REPORT_HEADER);
++
++	static const u32 ButtonMap[] =
++	{
++		GamePadButtonUp,
++		GamePadButtonDown,
++		GamePadButtonLeft,
++		GamePadButtonRight,
++		GamePadButtonStart,
++		GamePadButtonBack,
++		GamePadButtonL3,
++		GamePadButtonR3,
++		GamePadButtonLB,
++		GamePadButtonRB,
++		GamePadButtonXbox,
++		0,
++		GamePadButtonA,
++		GamePadButtonB,
++		GamePadButtonX,
++		GamePadButtonY
++	};
++
++	u32 nButtons = pReport->Buttons;
++	m_State.buttons = 0;
++	for (unsigned i = 0; i < REPORT_BUTTONS; i++)
++	{
++		if (nButtons & 1)
++		{
++			m_State.buttons |= ButtonMap[i];
++		}
++
++		nButtons >>= 1;
++	}
++
++	static const unsigned AxisMap[] =
++	{
++		GamePadAxisLeftX,
++		GamePadAxisLeftY,
++		GamePadAxisRightX,
++		GamePadAxisRightY,
++		GamePadAxisButtonLT,
++		GamePadAxisButtonRT
++	};
++
++	for (unsigned i = 0; i < REPORT_AXES; i++)
++	{
++		int nValue = pReport->Axes[i];
++
++		// remap axis value to default range [0, 255]
++		nValue = (unsigned) (nValue - REPORT_AXES_MINIMUM) >> 8;
++
++		unsigned nAxis = AxisMap[i];
++		if (   nAxis == GamePadAxisLeftY
++		    || nAxis == GamePadAxisRightY)	// Y-axes have to be reversed
++		{
++			nValue = GAMEPAD_AXIS_DEFAULT_MAXIMUM - nValue;
++		}
++
++		m_State.axes[nAxis].value = nValue;
++	}
++
++	for (unsigned i = 0; i < REPORT_ANALOG_BUTTONS; i++)
++	{
++		m_State.axes[AxisMap[REPORT_AXES+i]].value = pReport->AnalogButton[i];
++
++		if (pReport->AnalogButton[i] >= REPORT_ANALOG_BUTTON_THRESHOLD)
++		{
++			m_State.buttons |= GamePadButtonLT << i;
++		}
++	}
++}
++
++boolean CUSBGamePad8BitDoDevice::SetRumbleMode (TGamePadRumbleMode Mode)
++{
++	DMA_BUFFER (u8, Command, 8);
++	memset (Command, 0, 8);
++	Command[1] = 0x08;
++
++	switch (Mode)
++	{
++	case GamePadRumbleModeOff:
++		break;
++
++	case GamePadRumbleModeLow:
++		Command[4] = 0xFF;
++		break;
++
++	case GamePadRumbleModeHigh:
++		Command[3] = 0xFF;
++		break;
++
++	default:
++		assert (0);
++		return FALSE;
++	}
++
++	return SendToEndpointOut (Command, 8);
++}
+diff --git a/libs/circle/lib/usb/usbgamepad8bitdoum2.cpp b/libs/circle/lib/usb/usbgamepad8bitdoum2.cpp
+new file mode 100644
+index 00000000..8ee7d59f
+--- /dev/null
++++ b/libs/circle/lib/usb/usbgamepad8bitdoum2.cpp
+@@ -0,0 +1,107 @@
++//
++// usbgamepad8bitdoum2.cpp
++//
++// Circle - A C++ bare metal environment for Raspberry Pi
++// Copyright (C) 2026  R. Stange <rsta2@o2online.de>
++//
++// This program is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// This program is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with this program.  If not, see <http://www.gnu.org/licenses/>.
++//
++#include <circle/usb/usbgamepad8bitdoum2.h>
++#include <circle/usb/usbhostcontroller.h>
++#include <circle/synchronize.h>
++#include <circle/logger.h>
++#include <assert.h>
++
++static const char FromUSBPad8BitDoUM2[] = "usbpad8bdum2";
++
++CUSBGamePad8BitDoUM2Device::CUSBGamePad8BitDoUM2Device (CUSBFunction *pFunction)
++:	CUSBGamePad8BitDoDevice (pFunction),
++	m_bInterfaceOK (SelectInterfaceByClass (0xFF, 0x5D, 0x01, 2))
++{
++}
++
++CUSBGamePad8BitDoUM2Device::~CUSBGamePad8BitDoUM2Device (void)
++{
++}
++
++int CUSBGamePad8BitDoUM2Device::SendXInputMagicControl (void)
++{
++	// Linux xpad queues interrupt-IN before issuing this request. The request
++	// is diagnostic/non-fatal because compatible receivers may stall it while
++	// still delivering valid XInput reports.
++	DMA_BUFFER (u8, MagicMessage, 20);
++	int nResult = GetHost ()->ControlMessage (GetEndpoint0 (),
++						 REQUEST_IN | REQUEST_VENDOR | REQUEST_TO_INTERFACE,
++						 0x01, 0x0100, 0x0000,
++						 MagicMessage, 20);
++	CLogger::Get ()->Write (FromUSBPad8BitDoUM2,
++				nResult == 20 ? LogNotice : LogWarning,
++				"Magic control request returned %d bytes", nResult);
++
++	return nResult;
++}
++
++boolean CUSBGamePad8BitDoUM2Device::Configure (void)
++{
++	if (!m_bInterfaceOK)
++	{
++		ConfigurationError (FromUSBPad8BitDoUM2);
++		return FALSE;
++	}
++
++	if (!CUSBGamePad8BitDoDevice::Configure ())
++	{
++		return FALSE;
++	}
++
++	const TUSBDeviceDescriptor *pDeviceDesc = GetDevice ()->GetDeviceDescriptor ();
++	assert (pDeviceDesc != 0);
++	assert (pDeviceDesc->idVendor == 0x2DC8 && pDeviceDesc->idProduct == 0x310B);
++
++	CLogger::Get ()->Write (FromUSBPad8BitDoUM2, LogNotice,
++			      "UM2 receiver revision %x", (unsigned) pDeviceDesc->bcdDevice);
++	CLogger::Get ()->Write (FromUSBPad8BitDoUM2, LogNotice,
++			      "Interface %u class %02X subclass %02X protocol %02X endpoints %u",
++			      (unsigned) GetInterfaceNumber (),
++			      (unsigned) GetInterfaceClass (),
++			      (unsigned) GetInterfaceSubClass (),
++			      (unsigned) GetInterfaceProtocol (),
++			      (unsigned) GetNumEndpoints ());
++
++	DMA_BUFFER (u8, InitCommand, 3);
++	InitCommand[0] = 0x01;
++	InitCommand[1] = 0x03;
++	InitCommand[2] = 0x02;
++
++	CLogger::Get ()->Write (FromUSBPad8BitDoUM2, LogNotice, "Init OUT begin");
++	if (!SendToEndpointOut (InitCommand, 3))
++	{
++		CLogger::Get ()->Write (FromUSBPad8BitDoUM2, LogError, "Init OUT failed");
++		return FALSE;
++	}
++	CLogger::Get ()->Write (FromUSBPad8BitDoUM2, LogNotice, "Init OUT complete");
++
++	CLogger::Get ()->Write (FromUSBPad8BitDoUM2, LogNotice, "Interrupt IN queue begin");
++	if (!StartRequest ())
++	{
++		CLogger::Get ()->Write (FromUSBPad8BitDoUM2, LogError,
++				      "XInput interrupt IN queue failed");
++		return FALSE;
++	}
++	CLogger::Get ()->Write (FromUSBPad8BitDoUM2, LogNotice, "Interrupt IN queued");
++
++	SendXInputMagicControl ();
++
++	return TRUE;
++}
+diff --git a/libs/circle/lib/usb/usbgamepad8bitdoxinput.cpp b/libs/circle/lib/usb/usbgamepad8bitdoxinput.cpp
+new file mode 100644
+index 00000000..99430c59
+--- /dev/null
++++ b/libs/circle/lib/usb/usbgamepad8bitdoxinput.cpp
+@@ -0,0 +1,154 @@
++//
++// usbgamepad8bitdoxinput.cpp
++//
++// Circle - A C++ bare metal environment for Raspberry Pi
++// Copyright (C) 2018-2026  R. Stange <rsta2@o2online.de>
++//
++// Information to implement this was taken from:
++//	https://github.com/felis/USB_Host_Shield_2.0/blob/master/XBOXUSB.cpp
++//	Copyright (C) 2012 Kristian Lauszus, TKJ Electronics. All rights reserved.
++//	Licensed under GPLv2
++//
++// This program is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// This program is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with this program.  If not, see <http://www.gnu.org/licenses/>.
++//
++#include <circle/usb/usbgamepad8bitdoxinput.h>
++#include <circle/usb/usbhostcontroller.h>
++#include <circle/synchronize.h>
++#include <circle/logger.h>
++#include <assert.h>
++
++static const char FromUSBPad8BitDo[] = "usbpad8bitdo";
++
++CUSBGamePad8BitDoXInputDevice::CUSBGamePad8BitDoXInputDevice (CUSBFunction *pFunction)
++:	CUSBGamePad8BitDoDevice (pFunction)
++{
++}
++
++CUSBGamePad8BitDoXInputDevice::~CUSBGamePad8BitDoXInputDevice (void)
++{
++}
++
++boolean CUSBGamePad8BitDoXInputDevice::StartXInput (void)
++{
++	if (!StartRequest ())
++	{
++		CLogger::Get ()->Write (FromUSBPad8BitDo, LogError,
++				      "XInput interrupt IN queue failed");
++		return FALSE;
++	}
++
++	return TRUE;
++}
++
++int CUSBGamePad8BitDoXInputDevice::SendXInputMagicControl (void)
++{
++	// Linux xpad queues the interrupt-IN transfer first, then performs this
++	// vendor request for Xbox 360-compatible third-party controllers. Some
++	// devices stall the request, so callers intentionally treat it as non-fatal.
++	DMA_BUFFER (u8, MagicMessage, 20);
++	int nResult = GetHost ()->ControlMessage (GetEndpoint0 (),
++						 REQUEST_IN | REQUEST_VENDOR | REQUEST_TO_INTERFACE,
++						 0x01, 0x0100, 0x0000,
++						 MagicMessage, 20);
++	CLogger::Get ()->Write (FromUSBPad8BitDo,
++				nResult < 0 ? LogWarning : LogNotice,
++				"XInput magic control request returned %d bytes", nResult);
++
++	return nResult;
++}
++
++boolean CUSBGamePad8BitDoXInputDevice::SetLEDMode (TGamePadLEDMode Mode)
++{
++	static const u8 LEDMode[] = {0x00, 0x06, 0x07, 0x08, 0x09};
++
++	if (Mode >= sizeof LEDMode / sizeof LEDMode[0])
++	{
++		return FALSE;
++	}
++
++	DMA_BUFFER (u8, Command, 3);
++	Command[0] = 0x01;
++	Command[1] = 0x03;
++	Command[2] = LEDMode[Mode];
++
++	return SendToEndpointOut (Command, 3);
++}
++
++boolean CUSBGamePad8BitDoXInputDevice::Configure (void)
++{
++	if (!CUSBGamePad8BitDoDevice::Configure ())
++	{
++		return FALSE;
++	}
++
++	const TUSBDeviceDescriptor *pDeviceDesc = GetDevice ()->GetDeviceDescriptor ();
++	assert (pDeviceDesc != 0);
++	assert (pDeviceDesc->idVendor == 0x2DC8 && pDeviceDesc->idProduct == 0x3106);
++
++	CLogger::Get ()->Write (FromUSBPad8BitDo, LogNotice,
++			      "Receiver revision %x", (unsigned) pDeviceDesc->bcdDevice);
++	CLogger::Get ()->Write (FromUSBPad8BitDo, LogNotice,
++			      "Interface %u class %02X subclass %02X protocol %02X endpoints %u",
++			      (unsigned) GetInterfaceNumber (),
++			      (unsigned) GetInterfaceClass (),
++			      (unsigned) GetInterfaceSubClass (),
++			      (unsigned) GetInterfaceProtocol (),
++			      (unsigned) GetNumEndpoints ());
++
++	// Match Linux xpad's initial player-identification command for this
++	// receiver. SetLEDMode (GamePadLEDModeOn1) would send 0x06.
++	DMA_BUFFER (u8, InitCommand, 3);
++	InitCommand[0] = 0x01;
++	InitCommand[1] = 0x03;
++	InitCommand[2] = 0x02;
++
++	CLogger::Get ()->Write (FromUSBPad8BitDo, LogNotice, "Init OUT begin");
++	if (!SendToEndpointOut (InitCommand, 3))
++	{
++		CLogger::Get ()->Write (FromUSBPad8BitDo, LogError, "Init OUT failed");
++		return FALSE;
++	}
++	CLogger::Get ()->Write (FromUSBPad8BitDo, LogNotice, "Init OUT complete");
++
++	if (pDeviceDesc->bcdDevice == 0x0100)
++	{
++		// The receiver first enumerates with bootstrap firmware 1.00,
++		// then disconnects and returns as 3107 (idle) or as the 1.14
++		// runtime device after pairing. Polling the bootstrap input
++		// endpoint produces transaction errors and can interfere with
++		// this mode switch. The initialization command above is all it
++		// needs here. Do not publish this transient personality as a
++		// gamepad while waiting for the runtime device.
++		UnregisterDevice ();
++		CLogger::Get ()->Write (FromUSBPad8BitDo, LogNotice,
++				      "Waiting for runtime re-enumeration");
++		return TRUE;
++	}
++
++	CLogger::Get ()->Write (FromUSBPad8BitDo, LogNotice,
++			      "Interrupt IN queue begin");
++	if (!StartXInput ())
++	{
++		return FALSE;
++	}
++	CLogger::Get ()->Write (FromUSBPad8BitDo, LogNotice,
++			      "Interrupt IN queued");
++	CLogger::Get ()->Write (FromUSBPad8BitDo, LogNotice,
++			      "Magic control begin on interface %u",
++			      (unsigned) GetInterfaceNumber ());
++
++	SendXInputMagicControl ();
++
++	return TRUE;
++}
+diff --git a/libs/circle/lib/usb/usbgamepadxbox360.cpp b/libs/circle/lib/usb/usbgamepadxbox360.cpp
+index 2064c369..794af4ab 100644
+--- a/libs/circle/lib/usb/usbgamepadxbox360.cpp
++++ b/libs/circle/lib/usb/usbgamepadxbox360.cpp
+@@ -23,6 +23,7 @@
+ // along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ //
+ #include <circle/usb/usbgamepadxbox360.h>
++#include <circle/usb/usb8bitdov1.h>
+ #include <circle/usb/usbhostcontroller.h>
+ #include <circle/synchronize.h>
+ #include <circle/logger.h>
+@@ -54,6 +55,12 @@ PACKED;
+ 
+ #define REPORT_SIZE	sizeof (TXbox360Report)
+ 
++// The original 8BitDo V1 receiver exposes the Xbox 360 VID/PID, but returns
++// input transfers longer than the 14-byte controller state. Request one full
++// endpoint packet for this exact receiver so xHCI does not reject the transfer
++// as babble. ReportHandler() still decodes only the common 14-byte prefix.
++#define REPORT_SIZE_8BITDO_V1	32
++
+ static const char FromUSBPadXbox360[] = "usbpadxbox360";
+ 
+ CUSBGamePadXbox360Device::CUSBGamePadXbox360Device (CUSBFunction *pFunction)
+@@ -67,7 +74,19 @@ CUSBGamePadXbox360Device::~CUSBGamePadXbox360Device (void)
+ 
+ boolean CUSBGamePadXbox360Device::Configure (void)
+ {
+-	m_usReportSize = REPORT_SIZE;
++	const TUSBDeviceDescriptor *pDeviceDesc = GetDevice ()->GetDeviceDescriptor ();
++	assert (pDeviceDesc != 0);
++	const boolean b8BitDoV1 =
++		IsUSB8BitDoV1Receiver (pDeviceDesc->idVendor,
++				      pDeviceDesc->idProduct,
++				      pDeviceDesc->bcdDevice);
++
++	m_usReportSize = b8BitDoV1 ? REPORT_SIZE_8BITDO_V1 : REPORT_SIZE;
++	if (b8BitDoV1)
++	{
++		CLogger::Get ()->Write (FromUSBPadXbox360, LogNotice,
++				      "Using 32-byte input buffer for 8BitDo V1 receiver");
++	}
+ 
+ 	if (!CUSBGamePadDevice::Configure ())
+ 	{
+@@ -101,7 +120,7 @@ boolean CUSBGamePadXbox360Device::Configure (void)
+ void CUSBGamePadXbox360Device::ReportHandler (const u8 *pReport, unsigned nReportSize)
+ {
+ 	if (   pReport != 0
+-	    && nReportSize == REPORT_SIZE
++	    && nReportSize >= REPORT_SIZE
+ 	    && pReport[0] == (REPORT_HEADER & 0xFF)
+ 	    && pReport[1] == (REPORT_HEADER >> 8)
+ 	    && m_pStatusHandler != 0)
+diff --git a/libs/circle/lib/usb/usbkeyboard.cpp b/libs/circle/lib/usb/usbkeyboard.cpp
+index 05fe2fab..b5adf198 100644
+--- a/libs/circle/lib/usb/usbkeyboard.cpp
++++ b/libs/circle/lib/usb/usbkeyboard.cpp
+@@ -67,7 +67,12 @@ boolean CUSBKeyboardDevice::Configure (void)
+ 		m_nReportSize++;
+ 	}
+ 
+-	if (!CUSBHIDDevice::ConfigureHID (m_nReportSize))
++	return ConfigureKeyboard (m_nReportSize);
++}
++
++boolean CUSBKeyboardDevice::ConfigureKeyboard (unsigned nReportSize)
++{
++	if (!CUSBHIDDevice::ConfigureHID (nReportSize))
+ 	{
+ 		CLogger::Get ()->Write (FromUSBKbd, LogError, "Cannot configure HID device");
+ 
+diff --git a/libs/circle/lib/usb/usbkeyboard8bitdo.cpp b/libs/circle/lib/usb/usbkeyboard8bitdo.cpp
+new file mode 100644
+index 00000000..f759118e
+--- /dev/null
++++ b/libs/circle/lib/usb/usbkeyboard8bitdo.cpp
+@@ -0,0 +1,85 @@
++//
++// usbkeyboard8bitdo.cpp
++//
++// Circle - A C++ bare metal environment for Raspberry Pi
++// Copyright (C) 2014-2026  R. Stange <rsta2@o2online.de>
++// 
++// This program is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// This program is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with this program.  If not, see <http://www.gnu.org/licenses/>.
++//
++#include <circle/usb/usbkeyboard8bitdo.h>
++
++#define USBKEYB8BITDO_REPORT_SIZE	17
++
++static const char FromUSBKbd8BitDo[] = "ukbd8bitdo";
++
++CUSBKeyboard8BitDoDevice::CUSBKeyboard8BitDoDevice (CUSBFunction *pFunction)
++: 	CUSBKeyboardDevice (pFunction)
++{
++}
++
++CUSBKeyboard8BitDoDevice::~CUSBKeyboard8BitDoDevice (void)
++{
++}
++
++boolean CUSBKeyboard8BitDoDevice::Configure (void)
++{
++	return ConfigureKeyboard (USBKEYB8BITDO_REPORT_SIZE);
++}
++
++void CUSBKeyboard8BitDoDevice::ReportHandler (const u8 *pReport, unsigned nReportSize)
++{
++	// Forward HID transfer failures to the common keyboard driver.
++	if (pReport == 0)
++	{
++		CUSBKeyboardDevice::ReportHandler (0, 0);
++
++		return;
++	}
++
++	// Convert the 8BitDo NKRO bitmap report to a boot keyboard report.
++	if (   nReportSize == USBKEYB8BITDO_REPORT_SIZE
++	    && (pReport[0] == 0x0A || pReport[0] == 0x0C))
++	{
++		u8 Report[USBKEYB_REPORT_SIZE] = {pReport[1]};
++		unsigned nSlots = 0;
++
++		for (unsigned nUsage = 0x04; nUsage <= 0x77 && nSlots < 6; nUsage++)
++		{
++			if (pReport[2 + nUsage / 8] & (1U << (nUsage % 8)))
++			{
++				Report[2 + nSlots++] = nUsage;
++			}
++		}
++
++		CUSBKeyboardDevice::ReportHandler (Report, sizeof Report);
++
++		return;
++	}
++
++	// Strip the report ID from a standard boot keyboard report.
++	if (nReportSize == 9 && pReport[0] == 0x01)
++	{
++		CUSBKeyboardDevice::ReportHandler (pReport + 1, USBKEYB_REPORT_SIZE);
++
++		return;
++	}
++
++	// Forward an unprefixed standard boot keyboard report.
++	if (nReportSize == USBKEYB_REPORT_SIZE)
++	{
++		CUSBKeyboardDevice::ReportHandler (pReport, nReportSize);
++
++		return;
++	}
++}
+\ No newline at end of file
+diff --git a/libs/circle/lib/usb/usbstandardhub.cpp b/libs/circle/lib/usb/usbstandardhub.cpp
+index c8a78d87..641bcdf3 100644
+--- a/libs/circle/lib/usb/usbstandardhub.cpp
++++ b/libs/circle/lib/usb/usbstandardhub.cpp
+@@ -33,6 +33,10 @@ CNumberPool CUSBStandardHub::s_DeviceNumberPool (1);
+ static const char FromHub[] = "usbhub";
+ static const char DevicePrefix[] = "uhub";
+ 
++static const unsigned PortDebounceTimeoutMs = 2000;
++static const unsigned PortDebounceStepMs = 25;
++static const unsigned PortDebounceStableMs = 100;
++
+ CUSBStandardHub::CUSBStandardHub (CUSBFunction *pFunction)
+ :	CUSBFunction (pFunction),
+ 	m_pHubDesc (0),
+@@ -208,12 +212,20 @@ boolean CUSBStandardHub::RemoveDeviceAt (unsigned nPortIndex)
+ 		return FALSE;
+ 	}
+ 
+-	delete m_pDevice[nPortIndex];
+-	m_pDevice[nPortIndex] = 0;
++	DetachDeviceAt (nPortIndex);
+ 
+ 	return TRUE;
+ }
+ 
++void CUSBStandardHub::DetachDeviceAt (unsigned nPortIndex)
++{
++	assert (nPortIndex < m_nPorts);
++
++	delete m_pDevice[nPortIndex];
++	m_pDevice[nPortIndex] = 0;
++	m_bPortConfigured[nPortIndex] = FALSE;
++}
++
+ boolean CUSBStandardHub::DisablePort (unsigned nPortIndex)
+ {
+ 	assert (nPortIndex < m_nPorts);
+@@ -232,6 +244,77 @@ boolean CUSBStandardHub::DisablePort (unsigned nPortIndex)
+ 	return TRUE;
+ }
+ 
++boolean CUSBStandardHub::DebouncePort (unsigned nPortIndex)
++{
++	assert (nPortIndex < m_nPorts);
++	assert (m_pStatus[nPortIndex] != 0);
++
++	CUSBHostController *pHost = GetHost ();
++	assert (pHost != 0);
++
++	CUSBEndpoint *pEndpoint0 = GetEndpoint0 ();
++	assert (pEndpoint0 != 0);
++
++	u16 usConnection = 0xFFFF;
++	unsigned nStableMs = 0;
++
++	for (unsigned nTotalMs = 0; nTotalMs <= PortDebounceTimeoutMs;
++	     nTotalMs += PortDebounceStepMs)
++	{
++		if (pHost->ControlMessage (pEndpoint0,
++			REQUEST_IN | REQUEST_CLASS | REQUEST_TO_OTHER,
++			GET_STATUS, 0, nPortIndex+1, m_pStatus[nPortIndex], 4) != 4)
++		{
++			CLogger::Get ()->Write (FromHub, LogWarning,
++					      "Cannot debounce port %u", nPortIndex+1);
++			return FALSE;
++		}
++
++		u16 usChangeStatus = m_pStatus[nPortIndex]->wChangeStatus;
++		u16 usCurrentConnection =
++			m_pStatus[nPortIndex]->wPortStatus & PORT_CONNECTION__MASK;
++
++		if (   !(usChangeStatus & C_PORT_CONNECTION__MASK)
++		    && usCurrentConnection == usConnection)
++		{
++			nStableMs += PortDebounceStepMs;
++			if (nStableMs >= PortDebounceStableMs)
++			{
++				return TRUE;
++			}
++		}
++		else
++		{
++			nStableMs = 0;
++			usConnection = usCurrentConnection;
++		}
++
++		if (usChangeStatus & C_PORT_CONNECTION__MASK)
++		{
++			if (pHost->ControlMessage (pEndpoint0,
++				REQUEST_OUT | REQUEST_CLASS | REQUEST_TO_OTHER,
++				CLEAR_FEATURE, C_PORT_CONNECTION, nPortIndex+1, 0, 0) < 0)
++			{
++				CLogger::Get ()->Write (FromHub, LogWarning,
++						      "Cannot clear C_PORT_CONNECTION while "
++						      "debouncing port %u", nPortIndex+1);
++				return FALSE;
++			}
++		}
++
++		if (nTotalMs >= PortDebounceTimeoutMs)
++		{
++			break;
++		}
++
++		CTimer::Get ()->MsDelay (PortDebounceStepMs);
++	}
++
++	CLogger::Get ()->Write (FromHub, LogWarning,
++			      "Connect debounce failed on port %u", nPortIndex+1);
++	return FALSE;
++}
++
+ #if RASPPI >= 4
+ 
+ const TUSBHubInfo *CUSBStandardHub::GetHubInfo (void) const
+@@ -310,6 +393,31 @@ boolean CUSBStandardHub::EnumeratePorts (void)
+ 			continue;
+ 		}
+ 
++		// Consume the connection-change state represented by this initial
++		// snapshot before configuring the child. A later physical transition
++		// sets the change bit again and is handled by Plug&Play.
++		if (m_pStatus[nPort]->wChangeStatus & C_PORT_CONNECTION__MASK)
++		{
++			if (pHost->ControlMessage (pEndpoint0,
++				REQUEST_OUT | REQUEST_CLASS | REQUEST_TO_OTHER,
++				CLEAR_FEATURE, C_PORT_CONNECTION, nPort+1, 0, 0) < 0)
++			{
++				CLogger::Get ()->Write (FromHub, LogWarning,
++							"Cannot clear initial C_PORT_CONNECTION "
++							"(port %u)", nPort+1);
++			}
++			else if (pHost->ControlMessage (pEndpoint0,
++				REQUEST_IN | REQUEST_CLASS | REQUEST_TO_OTHER,
++				GET_STATUS, 0, nPort+1, m_pStatus[nPort], 4) != 4)
++			{
++				CLogger::Get ()->Write (FromHub, LogError,
++							"Cannot refresh initial status of port %u",
++							nPort+1);
++
++				continue;
++			}
++		}
++
+ 		assert (m_pStatus[nPort]->wPortStatus & PORT_POWER__MASK);
+ 		if (!(m_pStatus[nPort]->wPortStatus & PORT_CONNECTION__MASK))
+ 		{
+@@ -559,6 +667,8 @@ void CUSBStandardHub::HandlePortStatusChange (void)
+ 		}
+ 
+ 		u16 usChangeStatus = m_pStatus[nPort]->wChangeStatus;
++		boolean bConnectChange =
++			(usChangeStatus & C_PORT_CONNECTION__MASK) != 0;
+ 
+ 		//CLogger::Get ()->Write (FromHub, LogDebug, "Change status is 0x%04X (port %u)",
+ 		//			(unsigned) usChangeStatus, nPort+1);
+@@ -576,6 +686,16 @@ void CUSBStandardHub::HandlePortStatusChange (void)
+ 							"Cannot clear C_PORT_ENABLE (port %u)",
+ 							nPort+1);
+ 			}
++
++			// An existing device which was unexpectedly disabled has to be
++			// treated like a connection change. Otherwise its stale device
++			// object prevents the port from being enumerated again.
++			if (   !bConnectChange
++			    && !(m_pStatus[nPort]->wPortStatus & PORT_ENABLE__MASK)
++			    && m_pDevice[nPort] != 0)
++			{
++				bConnectChange = TRUE;
++			}
+ 		}
+ 
+ 		if (usChangeStatus & C_PORT_RESET__MASK)
+@@ -600,25 +720,29 @@ void CUSBStandardHub::HandlePortStatusChange (void)
+ 							"Cannot clear C_PORT_CONNECTION (port %u)",
+ 							nPort+1);
+ 			}
++		}
+ 
+-			if (m_pStatus[nPort]->wPortStatus & PORT_CONNECTION__MASK)
++		if (bConnectChange)
++		{
++			// A connection-change bit may represent a complete disconnect and
++			// reconnect which finished before the hub status was read. Always
++			// discard the old child before inspecting the stable final state.
++			if (m_pDevice[nPort] != 0)
+ 			{
+-				//CLogger::Get ()->Write (FromHub, LogDebug,
+-				//			"Device connected (port %u)", nPort+1);
+-
+-				if (m_pDevice[nPort] == 0)
+-				{
+-					ReScanDevices ();
+-				}
++				DetachDeviceAt (nPort);
+ 			}
+-			else
++
++			if (!DebouncePort (nPort))
+ 			{
+-				//CLogger::Get ()->Write (FromHub, LogDebug,
+-				//			"Device disconnected (port %u)", nPort+1);
++				continue;
++			}
+ 
+-				if (m_pDevice[nPort] != 0)
++			if (m_pStatus[nPort]->wPortStatus & PORT_CONNECTION__MASK)
++			{
++				if (!ReScanDevices ())
+ 				{
+-					RemoveDeviceAt (nPort);
++					CLogger::Get ()->Write (FromHub, LogWarning,
++							      "Cannot re-enumerate port %u", nPort+1);
+ 				}
+ 			}
+ 		}
+diff --git a/libs/circle/lib/usb/xhciendpoint.cpp b/libs/circle/lib/usb/xhciendpoint.cpp
+index a845481e..499cc66b 100644
+--- a/libs/circle/lib/usb/xhciendpoint.cpp
++++ b/libs/circle/lib/usb/xhciendpoint.cpp
+@@ -39,6 +39,10 @@ CXHCIEndpoint::CXHCIEndpoint (CXHCIUSBDevice *pDevice, CXHCIDevice *pXHCIDevice)
+ 	m_pMMIO (pXHCIDevice->GetMMIOSpace ()),
+ 	m_bValid (TRUE),
+ 	m_pTransferRing (0),
++	m_uchEndpointAddress (0),
++	m_uchAttributes (0),
++	m_usMaxPacketSize (USB_DEFAULT_MAX_PACKET_SIZE),
++	m_uchInterval (0),
+ 	m_uchEndpointID (1),
+ 	m_uchEndpointType (XHCI_EP_CONTEXT_EP_TYPE_CONTROL),
+ 	m_pURB {0, 0},
+@@ -148,6 +152,20 @@ CXHCIEndpoint::CXHCIEndpoint (CXHCIUSBDevice *pDevice, const TUSBEndpointDescrip
+ 		return;
+ 	}
+ 
++#ifndef NDEBUG
++	CLogger::Get ()->Write (From, LogNotice,
++			      "Configured slot %u endpoint %u (addr %02X, speed %u, "
++			      "attributes %02X, maxpkt %u, bInterval %u, xhci interval %u)",
++			      (unsigned) m_pDevice->GetSlotID (),
++			      (unsigned) m_uchEndpointID,
++			      (unsigned) m_uchEndpointAddress,
++			      (unsigned) m_pDevice->GetSpeed (),
++			      (unsigned) m_uchAttributes,
++			      (unsigned) m_usMaxPacketSize,
++			      (unsigned) pDesc->bInterval,
++			      (unsigned) m_uchInterval);
++#endif
++
+ 	m_pDevice->RegisterEndpoint (m_uchEndpointID, this);
+ }
+ 
+@@ -282,8 +300,15 @@ boolean CXHCIEndpoint::TransferAsync (CUSBRequest *pURB, unsigned nTimeoutMs)
+ 		assert ((uintptr) pBuffer > MEM_KERNEL_END);
+ 		CleanAndInvalidateDataCacheRange ((uintptr) pBuffer, nBufLen);
+ 
+-		if (!EnqueueTRB (  XHCI_TRB_TYPE_NORMAL << XHCI_TRB_CONTROL_TRB_TYPE__SHIFT
+-				 | XHCI_TRANSFER_TRB_CONTROL_IOC,
++		u32 nControl =   XHCI_TRB_TYPE_NORMAL << XHCI_TRB_CONTROL_TRB_TYPE__SHIFT
++			       | XHCI_TRANSFER_TRB_CONTROL_IOC;
++		if (m_uchEndpointAddress & 0x80)
++		{
++			// IN transfers must notify on a short packet, as required by xHCI.
++			nControl |= XHCI_TRANSFER_TRB_CONTROL_ISP;
++		}
++
++		if (!EnqueueTRB (nControl,
+ 		     		 nBufLen | 0 << XHCI_TRANSFER_TRB_STATUS_TD_SIZE__SHIFT,
+ 				 XHCI_TO_DMA_LO (pBuffer),
+ 				 XHCI_TO_DMA_HI (pBuffer)))
+@@ -450,8 +475,31 @@ void CXHCIEndpoint::TransferEvent (u8 uchCompletionCode, u32 nTransferLength)
+ 	}
+ 	else if (pURB->GetEndpoint ()->GetType () != EndpointTypeIsochronous)
+ 	{
+-		CLogger::Get ()->Write (From, LogWarning, "Transfer error %u on endpoint %u",
+-					(unsigned) uchCompletionCode, (unsigned) m_uchEndpointID);
++		TXHCIDeviceContext *pDeviceContext = m_pDevice->GetDeviceContext ();
++		assert (pDeviceContext != 0);
++		const TXHCIEndpointContext *pEPContext =
++			&pDeviceContext->Endpoint[m_uchEndpointID-1];
++
++		CLogger::Get ()->Write (From, LogWarning,
++				      "Transfer error %u on slot %u endpoint %u "
++				      "(addr %02X, state %u, residual %u/%u, "
++				      "maxpkt %u, interval %u, buffer 0x%lX)",
++				      (unsigned) uchCompletionCode,
++				      (unsigned) m_pDevice->GetSlotID (),
++				      (unsigned) m_uchEndpointID,
++				      (unsigned) m_uchEndpointAddress,
++				      (unsigned) pEPContext->EPState,
++				      (unsigned) nTransferLength,
++				      (unsigned) pURB->GetBufLen (),
++				      (unsigned) m_usMaxPacketSize,
++				      (unsigned) m_uchInterval,
++				      (unsigned long) (uintptr) pURB->GetBuffer ());
++
++		if (   uchCompletionCode == XHCI_TRB_COMPLETION_CODE_USB_TRANSACTION_ERROR
++		    || uchCompletionCode == XHCI_TRB_COMPLETION_CODE_SPLIT_TRANSACTION_ERROR)
++		{
++			pURB->SetUSBError (USBErrorTransaction);
++		}
+ 	}
+ 
+ 	m_SpinLock.Acquire ();
+@@ -468,18 +516,22 @@ boolean CXHCIEndpoint::ResetFromHalted (void)
+ 	assert (m_pDevice);
+ 	assert (XHCI_IS_ENDPOINTID (m_uchEndpointID));
+ 
+-	if (!m_pXHCIDevice->GetCommandManager ()->ResetEndpoint (m_pDevice->GetSlotID (),
+-								 m_uchEndpointID))
++	int nResult = m_pXHCIDevice->GetCommandManager ()->ResetEndpoint (
++							m_pDevice->GetSlotID (),
++							m_uchEndpointID);
++	if (!XHCI_CMD_SUCCESS (nResult))
+ 	{
+ 		return FALSE;
+ 	}
+ 
+ 	assert (m_pTransferRing);
+-	return m_pXHCIDevice->GetCommandManager ()->SetTRDequeuePointer (
++	nResult = m_pXHCIDevice->GetCommandManager ()->SetTRDequeuePointer (
+ 								m_pDevice->GetSlotID (),
+ 								m_uchEndpointID,
+ 								m_pTransferRing->GetEnqueueTRB (),
+ 								!!m_pTransferRing->GetCycleState ());
++
++	return XHCI_CMD_SUCCESS (nResult);
+ }
+ 
+ #ifndef NDEBUG
+@@ -609,7 +661,9 @@ TXHCIInputContext *CXHCIEndpoint::GetInputContextConfigureEndpoint (void)
+ 	case XHCI_EP_CONTEXT_EP_TYPE_INTERRUPT_OUT:
+ 	case XHCI_EP_CONTEXT_EP_TYPE_INTERRUPT_IN:
+ 		pEPContext->Interval = m_uchInterval;
+-		pEPContext->AverageTRBLength = 16;	// best guess
++		// xHCI 1.1 section 4.14.1.1: for periodic endpoints this is the
++		// maximum amount available per ESIT.
++		pEPContext->AverageTRBLength = m_usMaxPacketSize;
+ 		pEPContext->MaxESITPayload = m_usMaxPacketSize;
+ 		break;
+ 

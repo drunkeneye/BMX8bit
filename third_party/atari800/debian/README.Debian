@@ -1,0 +1,46 @@
+Getting Atari ROMs
+------------------
+
+Atari800 will fetch required files from the Internet starting from version 7.
+Check your ~/.atari800.cfg for locations and additional configuration. It will 
+be created in ~/.atari800.cfg on the first start of the emulator.
+
+Running the Emulator
+--------------------
+
+In the past, 3 versions of the Atari emulator were needed to support both
+an X version and either vga or curses version for the console.
+
+With the incorporation of the SDL interface, the same code can run in both
+the console and an X window.
+
+Luck,
+
+-- Dale Scheetz <dwarf@polaris.net>
+
+From the new maintainer:
+------------------------
+
+1st takeover
+------------
+
+  I took over this package from Dale after using it for some years, thanks Dwarf!
+
+  Future packages should be build with either
+   - diskleds (temporarily visible disk activity indicators) or
+   - siosound (the atari makes some noise for every disk sector transferred).
+  Please vote!
+
+  Join the A-Team to comaintain this and possibly other (Atari-)Emulators and
+  build some common foundation and knowledgebase for emulation within Debian GNU.
+
+  Have a nice day, Martin Albert <ma@debian.org>
+
+2nd takeover
+------------
+
+  I took over this package from Martin, thanks for excellent work. I am in close
+  cooperation with Petr Stehlik, who maintains the sources, he is doing 
+  excellent job as a release manager.
+
+  Enjoy the package, Antonin Kral <A.Kral@sh.cvut.cz>

@@ -1,0 +1,135 @@
+# BMC64 keyboard mapping file suitable for both
+# USB and real C64 keyboards using GPIO
+#
+# A Keyboard map is read in as patch to the current map.
+#
+# File format:
+# - comment lines start with '#'
+# - keyword lines start with '!keyword'
+# - normal line has 'keysym/scancode row column shiftflag'
+#
+# Keywords and their lines are:
+# '!CLEAR'               clear whole table
+# '!INCLUDE filename'    read file as mapping file
+# '!LSHIFT row col'      left shift keyboard row/column
+# '!RSHIFT row col'      right shift keyboard row/column
+# '!VSHIFT shiftkey'     virtual shift key (RSHIFT or LSHIFT)
+# '!UNDEF keysym'        remove keysym from table
+#
+# Shiftflag can have the values:
+# 0      key is not shifted for this keysym/scancode
+# 1      key is shifted for this keysym/scancode
+# 2      left shift
+# 4      right shift
+# 8      key can be shifted or not with this keysym/scancode
+# 16     deshift key for this keysym/scancode
+# 32     another definition for this keysym/scancode follows
+#
+# Negative row values:
+# 'keysym -1 n' joystick #1, direction n
+# 'keysym -2 n' joystick #2, direction n
+# 'keysym -3 0' first RESTORE key
+# 'keysym -3 1' second RESTORE key
+# 'keysym -4 0' 40/80 column key
+# 'keysym -4 1' CAPS (ASCII/DIN) key
+#
+
+!CLEAR
+!LSHIFT 1 7
+!RSHIFT 6 4
+!VSHIFT RSHIFT
+!SHIFTL LSHIFT
+!LCBM 7 5
+!VCBM LCBM
+!LCTRL 7 2
+!VCTRL LCTRL
+
+Tab 7 2 16392       /* CTRL */
+Control_L 7 5 8200  /* Commodore Key */
+Alt_L 7 5 8200      /* Commodore Key */
+BackSpace 0 0 8
+Down 0 7 8
+Escape 7 7 8    /* RunStop */
+F1 0 4 8
+F2 0 4 1
+F3 0 5 8
+F4 0 5 1
+F5 0 6 8
+F6 0 6 1
+F7 0 3 8
+F8 0 3 1
+Home 6 3 8      /* Clr */
+Left 0 2 1
+Return 0 1 8
+Right 0 2 8
+Shift_L 1 7 2
+Shift_R 6 4 4
+Up 0 7 1
+LeftBracket 5 5 33    /* bracketleft */
+LeftBracket 5 6 144   /* Shift+bracketleft -> braceleft / at */
+SemiColon 6 2 32      /* semicolon */
+SemiColon 5 5 144     /* Shift+semicolon -> colon */
+Comma 5 7 8           /* comma */
+BackSlash 6 6 8       /* backslash / bar */
+Pound 6 5 0           /* equal */
+Equals 6 5 32         /* equal */
+Equals 5 0 144        /* Shift+equal -> plus */
+Period 5 4 8          /* period */
+Dash 5 3 32           /* minus */
+Dash 5 6 2192         /* Shift+minus -> underscore */
+SingleQuote 3 0 33    /* apostrophe */
+SingleQuote 7 3 128   /* Shift+apostrophe -> quotedbl */
+Slash 6 7 8           /* slash */
+Space 7 4 8           /* space */
+Insert 6 0 8          /* sterling */
+RightBracket 6 2 33   /* bracketright */
+RightBracket 6 1 144  /* Shift+bracketright -> braceright */
+BackQuote 7 1 0       /* arrowleft */
+Del 6 6 8             /* arrowup */
+0 4 3 32
+0 4 0 128             /* Shift+0 -> parenright */
+1 7 0 8
+2 7 3 32
+2 5 6 144             /* Shift+2 -> at */
+3 1 0 8
+4 1 3 8
+5 2 0 8
+6 2 3 32
+6 6 6 144             /* Shift+6 -> arrowup */
+7 3 0 32
+7 2 3 128             /* Shift+7 -> ampersand */
+8 3 3 32
+8 6 1 144             /* Shift+8 -> asterisk */
+9 4 0 32
+9 3 3 128             /* Shift+9 -> parenleft */
+a 1 2 8
+b 3 4 8
+c 2 4 8
+d 2 2 8
+e 1 6 8
+f 2 5 8
+g 3 2 8
+h 3 5 8
+i 4 1 8
+j 4 2 8
+k 4 5 8
+l 5 2 8
+m 4 4 8
+n 4 7 8
+o 4 6 8
+p 5 1 8
+q 7 6 8
+r 2 1 8
+s 1 5 8
+t 2 6 8
+u 3 6 8
+v 3 7 8
+w 1 1 8
+x 2 7 8
+y 3 1 8
+z 1 4 8
+
+# Restore key mappings
+PageUp -3 0
+CapsLock -4 1
+F11 -4 0 /* 40/80 Columns */

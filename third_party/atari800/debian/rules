@@ -1,0 +1,94 @@
+#!/usr/bin/make -f
+#
+# This is a debian/rules make file. It supports the targets:
+# build, clean, binary-indep, binary-arch, and binary
+#
+# Package name variables
+#
+P=atari800
+
+ARCH := $(shell dpkg-architecture -qDEB_BUILD_ARCH)
+
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+DPKG_EXPORT_BUILDFLAGS = 1
+include /usr/share/dpkg/buildflags.mk
+CFLAGS+=$(CPPFLAGS)
+CXXFLAGS+=$(CPPFLAGS)
+
+# Build the binary components and assemble the libraries
+# =====================================================================
+build: build-arch build-indep
+build-arch: build-stamp
+build-indep: build-stamp
+build-stamp:
+	$(checkdir)
+	debian/rules bld-sdl
+	touch build-stamp
+
+bld-sdl:
+	if [ -e Makefile ]; then $(MAKE) clean; fi
+	./autogen.sh
+	./configure \
+		 --with-video=sdl2 --with-sound=sdl2
+	$(MAKE)
+
+# Clean up after a build and before building a source package
+#======================================================================
+clean:
+	$(checkdir)
+	-rm -f build-stamp
+	if [ -e Makefile ]; then $(MAKE) clean; fi; \
+	 rm -f config.log config.status config.h Makefile
+	rm -f src/config.guess src/config.sub
+	find . -maxdepth 1 -type f -name 'atari800.*' ! -name 'atari800.spec' ! -name 'atari800.nsi' -delete
+	rm -f atari800
+	-rm -rf	debian/tmp debian/*~ *~ *.orig *.log \
+		debian/files* debian/substvars*
+	-rm -f data/atari800.xpm
+
+
+install: build
+	dh_testdir
+	dh_testroot
+	dh_installdirs
+	convert data/atari2.png -resize 32x32 data/atari800.xpm
+	dh_install
+
+
+binary: binary-arch
+
+# No binary independent components to this package
+binary-indep:
+	echo "No independent binary components."
+
+# Build architecture-independent files here.
+binary-arch: build install binary-common
+
+binary-common:
+				dh_testdir
+				dh_testroot
+				dh_installdocs
+				dh_installcron
+				dh_installman
+				dh_installinfo
+				dh_installchangelogs
+				dh_link
+				dh_strip
+				dh_compress
+				dh_fixperms
+				dh_installdeb
+				dh_shlibdeps
+				dh_gencontrol
+				dh_md5sums
+				dh_builddeb
+
+define checkdir
+	test -f ./atari800.spec
+endef
+
+# Below here is fairly generic really
+checkroot:
+	$(checkdir)
+	test root = "`whoami`"
+
+.PHONY: binary binary-arch binary-indep clean checkroot

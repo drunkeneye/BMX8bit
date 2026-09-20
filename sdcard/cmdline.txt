@@ -1,0 +1,4 @@
+fast=true pi5kms=1 bmx_video_mode=pal-hdmi-720p machine_timing=pal-hdmi framebuffer_depth=16 hdmi_group=1 hdmi_mode=19 scaling_params=384,240,1152,720
+
+# Machine/video parameters on the first line are managed from machines.ini.
+# Other cmdline options are preserved when the selected mode changes.

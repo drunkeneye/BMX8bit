@@ -1,0 +1,56 @@
+#
+# Makefile for a Plus/4 kernel using VICE 3.10
+#
+
+MACHINE_CLASS = RASPI_PLUS4
+
+include mk/machines/Makefile-310.common
+
+VICELIBS := \
+	$(VICE310_CORE_OBJS) \
+	$(VICE)/midi.o \
+	$(VICE)/tapeport/libtapeport.a \
+	$(VICE)/datasette/libdatasette.a \
+	$(VICE)/plus4/libplus4.a \
+	$(VICE)/plus4/cart/libplus4cart.a \
+	$(VICE)/diag/libdiag.a \
+	$(VICE)/userport/libuserport.a \
+	$(VICE)/drive/iec/libdriveiec.a \
+	$(VICE)/drive/iecieee/libdriveiecieee.a \
+	$(VICE)/drive/iec/plus4exp/libdriveiecplus4exp.a \
+	$(VICE)/drive/tcbm/libdrivetcbm.a \
+	$(VICE)/drive/libdrive.a \
+	$(VICE)/drive/ieee/libdriveieee.a \
+	$(VICE)/parallel/libparallel.a \
+	$(VICE)/lib/p64/libp64.a \
+	$(VICE)/iecbus/libiecbus.a \
+	$(VICE)/vdrive/libvdrive.a \
+	$(VICE)/sid/libsid.a \
+	$(VICE)/monitor/libmonitor.a \
+	$(VICE)/joyport/libjoyport.a \
+	$(VICE)/samplerdrv/libsamplerdrv.a \
+	$(VICE)/arch/shared/sounddrv/libsounddrv.a \
+	$(VICE)/arch/shared/mididrv/libmididrv.a \
+	$(VICE)/arch/shared/socketdrv/libsocketdrv.a \
+	$(VICE)/arch/shared/hwsiddrv/libhwsiddrv.a \
+	$(VICE)/gfxoutputdrv/libgfxoutputdrv.a \
+	$(VICE)/printerdrv/libprinterdrv.a \
+	$(VICE)/diskimage/libdiskimage.a \
+	$(VICE)/fsdevice/libfsdevice.a \
+	$(VICE)/tape/libtape.a \
+	$(VICE)/fileio/libfileio.a \
+	$(VICE)/serial/libserial.a \
+	$(VICE)/core/libcore.a \
+	$(VICE)/rs232drv/librs232drv.a \
+	$(VICE)/raster/libraster.a \
+	$(VICE)/core/rtc/librtc.a \
+	$(VICE)/video/libvideo.a \
+	$(VICE)/arch/raspi/libarch.a \
+	$(VICE)/imagecontents/libimagecontents.a \
+	$(VICE310_RESID_LIBS) \
+	$(VICE)/plus4/libplus4stubs.a \
+	$(VICE)/plus4/libplus4.a \
+	$(VICE)/arch/raspi/libarch.a \
+	$(VICE)/arch/raspi/plus4/libarch_plus4.a
+
+include Makefile

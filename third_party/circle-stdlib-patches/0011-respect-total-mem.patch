@@ -1,0 +1,205 @@
+diff --git a/libs/circle/include/circle/machineinfo.h b/libs/circle/include/circle/machineinfo.h
+index a8b88bb..8338591 100644
+--- a/libs/circle/include/circle/machineinfo.h
++++ b/libs/circle/include/circle/machineinfo.h
+@@ -174,6 +174,7 @@ public:
+ 	boolean CheckDTB (boolean bDumpValues = FALSE);	// check DTB properties, used by Circle
+ 
+ 	const CDeviceTreeBlob *GetDTB (void) const;
++	boolean GetDTBHighMemSize (size_t *pSize) const;
+ 
+ #define PCIE_BUS_ONBOARD	0
+ 	#define PCIE_BUS_XHCI	PCIE_BUS_ONBOARD
+diff --git a/libs/circle/lib/machineinfo.cpp b/libs/circle/lib/machineinfo.cpp
+index 8b6a631..f9d4ad6 100644
+--- a/libs/circle/lib/machineinfo.cpp
++++ b/libs/circle/lib/machineinfo.cpp
+@@ -883,6 +883,96 @@ const CDeviceTreeBlob *CMachineInfo::GetDTB (void) const
+ 	return m_pDTB;
+ }
+ 
++boolean CMachineInfo::GetDTBHighMemSize (size_t *pSize) const
++{
++	assert (pSize != 0);
++	*pSize = 0;
++
++	if (m_pDTB == 0)
++	{
++		return FALSE;
++	}
++
++	const TDeviceTreeNode *pRoot = m_pDTB->FindNode ("/");
++	const TDeviceTreeNode *pMemory = m_pDTB->FindNode ("/memory@0");
++	if (pMemory == 0)
++	{
++		pMemory = m_pDTB->FindNode ("/memory");
++	}
++
++	if (pRoot == 0 || pMemory == 0)
++	{
++		return FALSE;
++	}
++
++	const TDeviceTreeProperty *pAddressCells =
++		m_pDTB->FindProperty (pRoot, "#address-cells");
++	const TDeviceTreeProperty *pSizeCells =
++		m_pDTB->FindProperty (pRoot, "#size-cells");
++	const TDeviceTreeProperty *pReg = m_pDTB->FindProperty (pMemory, "reg");
++	if (pAddressCells == 0 || pSizeCells == 0 || pReg == 0)
++	{
++		return FALSE;
++	}
++
++	unsigned nAddressCells = m_pDTB->GetPropertyValueWord (pAddressCells, 0);
++	unsigned nSizeCells = m_pDTB->GetPropertyValueWord (pSizeCells, 0);
++	if (   nAddressCells == 0 || nAddressCells > 2
++	    || nSizeCells == 0 || nSizeCells > 2)
++	{
++		return FALSE;
++	}
++
++	unsigned nEntryCells = nAddressCells + nSizeCells;
++	size_t nRegLength = m_pDTB->GetPropertyValueLength (pReg);
++	if (   nRegLength == 0
++	    || nRegLength % (nEntryCells * sizeof (u32)) != 0)
++	{
++		return FALSE;
++	}
++
++	unsigned nRegCells = nRegLength / sizeof (u32);
++	const u64 nHighMemStart = MEM_HIGHMEM_START;
++	const u64 nHighMemEnd = (u64) MEM_HIGHMEM_END + 1;
++
++	for (unsigned i = 0; i < nRegCells; i += nEntryCells)
++	{
++		u64 nAddress = 0;
++		for (unsigned j = 0; j < nAddressCells; j++)
++		{
++			nAddress = nAddress << 32
++				 | m_pDTB->GetPropertyValueWord (pReg, i+j);
++		}
++
++		u64 nSize = 0;
++		for (unsigned j = 0; j < nSizeCells; j++)
++		{
++			nSize = nSize << 32
++			      | m_pDTB->GetPropertyValueWord (pReg, i+nAddressCells+j);
++		}
++
++		u64 nRangeEnd = nAddress + nSize;
++		if (nRangeEnd < nAddress)
++		{
++			return FALSE;
++		}
++
++		if (nAddress <= nHighMemStart && nRangeEnd > nHighMemStart)
++		{
++			if (nRangeEnd > nHighMemEnd)
++			{
++				nRangeEnd = nHighMemEnd;
++			}
++
++			*pSize = (size_t) (nRangeEnd - nHighMemStart);
++			return TRUE;
++		}
++	}
++
++	// A valid memory map without a range above 1 GB disables high memory.
++	return TRUE;
++}
++
+ TMemoryWindow CMachineInfo::GetPCIeMemory (unsigned nBus) const
+ {
+ 	assert (s_pThis != 0);
+diff --git a/libs/circle/lib/memory.cpp b/libs/circle/lib/memory.cpp
+index b1a1d68..91f7caf 100644
+--- a/libs/circle/lib/memory.cpp
++++ b/libs/circle/lib/memory.cpp
+@@ -144,18 +144,27 @@ void CMemorySystem::Destructor (void)
+ 
+ void CMemorySystem::SetupHighMem (void)
+ {
+-	unsigned nRAMSize = CMachineInfo::Get ()->GetRAMSize ();
+-	if (nRAMSize > 1024)
++	size_t nHighSize = 0;
++	if (!CMachineInfo::Get ()->GetDTBHighMemSize (&nHighSize))
+ 	{
+-		u64 nHighSize = (nRAMSize - 1024) * MEGABYTE;
+-		if (nHighSize > MEM_HIGHMEM_END+1 - MEM_HIGHMEM_START)
++		unsigned nRAMSize = CMachineInfo::Get ()->GetRAMSize ();
++		if (nRAMSize > 1024)
+ 		{
+-			nHighSize = MEM_HIGHMEM_END+1 - MEM_HIGHMEM_START;
++			u64 nBoardHighSize = (nRAMSize - 1024) * MEGABYTE;
++			if (nBoardHighSize > MEM_HIGHMEM_END+1 - MEM_HIGHMEM_START)
++			{
++				nBoardHighSize = MEM_HIGHMEM_END+1 - MEM_HIGHMEM_START;
++			}
++
++			nHighSize = (size_t) nBoardHighSize;
+ 		}
++	}
+ 
+-		m_nMemSizeHigh = (size_t) nHighSize;
++	if (nHighSize > 0)
++	{
++		m_nMemSizeHigh = nHighSize;
+ 
+-		m_HeapHigh.Setup (MEM_HIGHMEM_START, (size_t) nHighSize, 0);
++		m_HeapHigh.Setup (MEM_HIGHMEM_START, nHighSize, 0);
+ 	}
+ }
+ 
+diff --git a/libs/circle/lib/memory64.cpp b/libs/circle/lib/memory64.cpp
+index 5a7543a..1713ccb 100644
+--- a/libs/circle/lib/memory64.cpp
++++ b/libs/circle/lib/memory64.cpp
+@@ -125,26 +125,35 @@ void CMemorySystem::Destructor (void)
+ 
+ void CMemorySystem::SetupHighMem (void)
+ {
++	size_t nHighSize = 0;
++	if (!CMachineInfo::Get ()->GetDTBHighMemSize (&nHighSize))
++	{
+ #ifndef KASAN_SUPPORTED
+-	unsigned nRAMSize = CMachineInfo::Get ()->GetRAMSize ();
++		unsigned nRAMSize = CMachineInfo::Get ()->GetRAMSize ();
+ #else
+-	unsigned nRAMSize = CMachineInfo::GetRAMSizeEarly ();
+-	if (nRAMSize > 4096)
+-	{
+-		nRAMSize = 4096;
+-	}
++		unsigned nRAMSize = CMachineInfo::GetRAMSizeEarly ();
++		if (nRAMSize > 4096)
++		{
++			nRAMSize = 4096;
++		}
+ #endif
+-	if (nRAMSize > 1024)
+-	{
+-		u64 nHighSize = (nRAMSize - 1024) * MEGABYTE;
+-		if (nHighSize > MEM_HIGHMEM_END+1 - MEM_HIGHMEM_START)
++		if (nRAMSize > 1024)
+ 		{
+-			nHighSize = MEM_HIGHMEM_END+1 - MEM_HIGHMEM_START;
++			u64 nBoardHighSize = (nRAMSize - 1024) * MEGABYTE;
++			if (nBoardHighSize > MEM_HIGHMEM_END+1 - MEM_HIGHMEM_START)
++			{
++				nBoardHighSize = MEM_HIGHMEM_END+1 - MEM_HIGHMEM_START;
++			}
++
++			nHighSize = (size_t) nBoardHighSize;
+ 		}
++	}
+ 
+-		m_nMemSizeHigh = (size_t) nHighSize;
++	if (nHighSize > 0)
++	{
++		m_nMemSizeHigh = nHighSize;
+ 
+-		m_HeapHigh.Setup (MEM_HIGHMEM_START, (size_t) nHighSize, 0);
++		m_HeapHigh.Setup (MEM_HIGHMEM_START, nHighSize, 0);
+ 	}
+ }
+ 

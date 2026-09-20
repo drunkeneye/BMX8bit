@@ -1,0 +1,182 @@
+--- a/libs/circle/include/circle/usb/usbaudiostreaming.h
++++ b/libs/circle/include/circle/usb/usbaudiostreaming.h
+@@ -164,6 +164,7 @@
+ 
+ 	u8 m_uchClockSourceID;
+ 	u8 m_uchSelectorUnitID;
++	u8 m_uchControlInterfaceNumber;
+ 	u8 m_uchFeatureUnitID[MaxTerminals];
+ 
+ 	CSpinLock m_SpinLock;
+--- a/libs/circle/lib/usb/usbaudiostreaming.cpp
++++ b/libs/circle/lib/usb/usbaudiostreaming.cpp
+@@ -129,6 +129,7 @@
+ 	m_nSyncAccu (0),
+ 	m_uchClockSourceID (USB_AUDIO_UNDEFINED_UNIT_ID),
+ 	m_uchSelectorUnitID (USB_AUDIO_UNDEFINED_UNIT_ID),
++	m_uchControlInterfaceNumber (0),
+ 	From ("uaudio")
+ {
+ 	for (unsigned i = 0; i < MaxTerminals; i++)
+@@ -375,24 +376,28 @@
+ 	}
+ 
+ 	// Find the associated audio control device
+-	CUSBAudioControlDevice *pControlDevice;
+-	int nControlFunction = -1;
+-	do
++	CUSBAudioControlDevice *pControlDevice = nullptr;
++	for (unsigned nControlFunction = 0; nControlFunction < USBDEV_MAX_FUNCTIONS;
++	     nControlFunction++)
+ 	{
+-		nControlFunction++;
+-
+ 		CUSBFunction *pFunction = GetDevice ()->GetFunction (nControlFunction);
+-		if (!pFunction)
++		if (   pFunction
++		    && pFunction->GetInterfaceClass ()    == 1
++		    && pFunction->GetInterfaceSubClass () == 1)
+ 		{
+-			LOGWARN ("Associated control device not found");
+-
+-			return FALSE;
++			pControlDevice = static_cast<CUSBAudioControlDevice *> (pFunction);
++			break;
+ 		}
++	}
+ 
+-		pControlDevice = (CUSBAudioControlDevice *) pFunction;
++	if (!pControlDevice)
++	{
++		LOGWARN ("Associated control device not found");
++
++		return FALSE;
+ 	}
+-	while (   pControlDevice->GetInterfaceClass ()    != 1
+-	       || pControlDevice->GetInterfaceSubClass () != 1);
++
++	m_uchControlInterfaceNumber = pControlDevice->GetInterfaceNumber ();
+ 
+ 	m_DeviceInfo.IsOutput = m_bIsOutput;
+ 	m_DeviceInfo.NumChannels = m_nChannels;
+@@ -443,7 +448,8 @@
+ 							REQUEST_OUT | REQUEST_CLASS | REQUEST_TO_INTERFACE,
+ 							USB_AUDIO_REQ_SET_CUR,
+ 							USB_AUDIO_CX_SELECTOR_CONTROL << 8,
+-							uchClockSelectorID << 8,
++							  uchClockSelectorID << 8
++							| m_uchControlInterfaceNumber,
+ 							ClockSource, 1) < 0)
+ 			{
+ 				LOGDBG ("Cannot select clock source");
+@@ -470,7 +476,8 @@
+ 						REQUEST_IN | REQUEST_CLASS | REQUEST_TO_INTERFACE,
+ 						USB_AUDIO_REQ_RANGE,
+ 						USB_AUDIO_CS_SAM_FREQ_CONTROL << 8,
+-						m_uchClockSourceID << 8,
++						  m_uchClockSourceID << 8
++						| m_uchControlInterfaceNumber,
+ 						NumSubRanges, 2) < 0)
+ 		{
+ 			LOGWARN ("Cannot get number of sampling frequency subranges");
+@@ -486,7 +493,8 @@
+ 						REQUEST_IN | REQUEST_CLASS | REQUEST_TO_INTERFACE,
+ 						USB_AUDIO_REQ_RANGE,
+ 						USB_AUDIO_CS_SAM_FREQ_CONTROL << 8,
+-						m_uchClockSourceID << 8,
++						  m_uchClockSourceID << 8
++						| m_uchControlInterfaceNumber,
+ 						RangesBuffer, nBufferSize) < 0)
+ 		{
+ 			LOGWARN ("Cannot get sampling frequency ranges");
+@@ -652,8 +660,8 @@
+ 	unsigned i;
+ 	for (i = 0; i < m_DeviceInfo.SampleRateRanges; i++)
+ 	{
+-		if (   m_DeviceInfo.SampleRateRange[i].Min >= nSampleRate
+-		    && m_DeviceInfo.SampleRateRange[i].Max <= nSampleRate)
++		if (   m_DeviceInfo.SampleRateRange[i].Min <= nSampleRate
++		    && m_DeviceInfo.SampleRateRange[i].Max >= nSampleRate)
+ 		{
+ 			break;
+ 		}
+@@ -694,7 +702,8 @@
+ 							REQUEST_OUT | REQUEST_CLASS | REQUEST_TO_INTERFACE,
+ 							USB_AUDIO_REQ_SET_CUR,
+ 							USB_AUDIO_CS_SAM_FREQ_CONTROL << 8,
+-							m_uchClockSourceID << 8,
++							  m_uchClockSourceID << 8
++							| m_uchControlInterfaceNumber,
+ 							tSampleFreq, 4) < 0)
+ 			{
+ 				LOGDBG ("Cannot set sample rate");
+@@ -850,7 +859,8 @@
+ 					REQUEST_OUT | REQUEST_CLASS | REQUEST_TO_INTERFACE,
+ 					USB_AUDIO_REQ_SET_CUR,
+ 					m_bVer200 ? USB_AUDIO_SU_SELECTOR_CONTROL << 8 | 0x00 : 0,
+-					m_uchSelectorUnitID << 8,
++					  m_uchSelectorUnitID << 8
++					| m_uchControlInterfaceNumber,
+ 					SelectorBuffer, 1) < 0)
+ 	{
+ 		return FALSE;
+@@ -880,7 +890,8 @@
+ 					REQUEST_OUT | REQUEST_CLASS | REQUEST_TO_INTERFACE,
+ 					USB_AUDIO_REQ_SET_CUR,
+ 					USB_AUDIO_FU_MUTE_CONTROL << 8 | 0x00,	// master channel
+-					m_uchFeatureUnitID[m_nActiveTerminal] << 8,
++					  m_uchFeatureUnitID[m_nActiveTerminal] << 8
++					| m_uchControlInterfaceNumber,
+ 					MuteBuffer, 1) < 0)
+ 	{
+ 		return FALSE;
+@@ -919,7 +930,8 @@
+ 							REQUEST_OUT | REQUEST_CLASS | REQUEST_TO_INTERFACE,
+ 							USB_AUDIO_REQ_SET_CUR,
+ 							USB_AUDIO_FU_VOLUME_CONTROL << 8 | i,
+-							m_uchFeatureUnitID[m_nActiveTerminal] << 8,
++							  m_uchFeatureUnitID[m_nActiveTerminal] << 8
++							| m_uchControlInterfaceNumber,
+ 							VolumeBuffer, 2) < 0)
+ 			{
+ 				return FALSE;
+@@ -933,7 +945,8 @@
+ 						REQUEST_OUT | REQUEST_CLASS | REQUEST_TO_INTERFACE,
+ 						USB_AUDIO_REQ_SET_CUR,
+ 						USB_AUDIO_FU_VOLUME_CONTROL << 8 | nChannel,
+-						m_uchFeatureUnitID[m_nActiveTerminal] << 8,
++						  m_uchFeatureUnitID[m_nActiveTerminal] << 8
++						| m_uchControlInterfaceNumber,
+ 						VolumeBuffer, 2) < 0)
+ 		{
+ 			return FALSE;
+@@ -980,7 +993,8 @@
+ 						REQUEST_IN | REQUEST_CLASS | REQUEST_TO_INTERFACE,
+ 						USB_AUDIO_REQ_GET_MIN,
+ 						USB_AUDIO_FU_VOLUME_CONTROL << 8 | uchChannel,
+-						uchFeatureUnitID << 8,
++						  uchFeatureUnitID << 8
++						| m_uchControlInterfaceNumber,
+ 						VolumeBuffer, 2) < 0)
+ 			{
+ 				LOGWARN ("Cannot get volume minimum");
+@@ -994,7 +1008,8 @@
+ 						REQUEST_IN | REQUEST_CLASS | REQUEST_TO_INTERFACE,
+ 						USB_AUDIO_REQ_GET_MAX,
+ 						USB_AUDIO_FU_VOLUME_CONTROL << 8 | uchChannel,
+-						uchFeatureUnitID << 8,
++						  uchFeatureUnitID << 8
++						| m_uchControlInterfaceNumber,
+ 						VolumeBuffer, 2) < 0)
+ 			{
+ 				LOGWARN ("Cannot get volume maximum");
+@@ -1011,7 +1026,8 @@
+ 						REQUEST_IN | REQUEST_CLASS | REQUEST_TO_INTERFACE,
+ 						USB_AUDIO_REQ_RANGE,
+ 						USB_AUDIO_FU_VOLUME_CONTROL << 8 | uchChannel,
+-						uchFeatureUnitID << 8,
++						  uchFeatureUnitID << 8
++						| m_uchControlInterfaceNumber,
+ 						VolumeBuffer, 8) < 0)
+ 			{
+ 				LOGWARN ("Cannot get volume range");

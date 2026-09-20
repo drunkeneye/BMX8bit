@@ -1,0 +1,91 @@
+Build instructions for the Android port
+---------------------------------------
+
+If you are looking for instructions on how to use the Android port, what the
+preferences mean etc. you should check out instead:
+
+https://atari800.github.io/Atari800forAndroid.html
+
+See also DOC/README.android.
+
+I. Prerequisites
+----------------
+
+To compile the Android port, you are going to need:
+
+1. A working autotools/make environment (e.g. Cygwin or MinGW on Windows).
+
+Before trying to build the Android port, it is a good idea to first try building
+the desktop version, for instance the SDL port. It is a good way to verify that
+the necessary tools are installed and working correctly. See DOC/INSTALL to
+build Atari800 on Unix environments, or DOC/BUILD.windows to build under Cygwin
+and MinGW.
+
+2. The Java JDK.
+
+Version 17 or later is recommended:
+
+https://adoptium.net/
+
+3. The Android SDK (command-line tools).
+
+Install the Android command-line tools (cmdline-tools) from:
+
+https://developer.android.com/studio#command-line-tools-only
+
+Then use sdkmanager to install required packages:
+
+# sdkmanager "platform-tools" "build-tools;36.0.0" "platforms;android-36" "cmake;3.22.1"
+
+4. The Android NDK.
+
+Install the NDK via sdkmanager:
+
+# sdkmanager "ndk;27.0.12077973"
+
+Or download it manually from:
+
+https://developer.android.com/ndk/downloads
+
+II. Setting up the environment
+------------------------------
+
+1. Set the ANDROID_HOME environment variable to point to the SDK root, e.g.:
+
+# export ANDROID_HOME=/path/to/android-sdk
+
+2. Set the JAVA_HOME environment variable to point to your JDK, e.g.:
+
+# export JAVA_HOME=/path/to/jdk-17
+
+3. Add the Android SDK tools to PATH:
+
+# export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH"
+
+III. Compiling
+--------------
+
+1. Unpack the source tarball of Atari800.
+
+2. If the configure script is missing, create it:
+
+# ./autogen.sh
+
+3. Configure the build:
+
+# ./configure --target=android
+
+4. Build the APK package:
+
+# make
+
+After a while, the APK package should appear in:
+
+src/android/build/outputs/apk/debug/colleen-debug.apk
+
+To build a release APK suitable for distribution:
+
+# cd src/android && ./gradlew assembleRelease
+
+You will need to configure signing in src/android/build.gradle.kts or supply
+keystore properties via the command line.

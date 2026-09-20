@@ -1,0 +1,88 @@
+diff --git a/configure b/configure
+index b87aeb1..dfdd931 100755
+--- a/configure
++++ b/configure
+@@ -112,6 +112,12 @@ echo "LIBCXX_REPO=$LIBCXX_REPO"
+ echo "Remaining arguments:"
+ for arg do echo '--> '"\`$arg'" ; done
+ 
++NEWLIB_CONFIGURE_OPTIONS=()
++if [[ " $CIRCLE_DEFINES " == *" -DNDEBUG "* ]]
++then
++    NEWLIB_CONFIGURE_OPTIONS+=(--disable-newlib-reent-check-verify)
++fi
++
+ if [ $CLANG -eq 1 ]
+ then
+     : ${CC:="clang"}
+@@ -372,7 +378,8 @@ fi
+ (
+     cd $NEWLIB_BUILD_DIR
+     "$TOPDIR/libs/circle-newlib/configure" --target "${NEWLIB_ARCH}" --disable-multilib \
+-        --prefix "$NEWLIB_INSTALL_DIR" --enable-newlib-long-time_t
++        --prefix "$NEWLIB_INSTALL_DIR" --enable-newlib-long-time_t \
++        "${NEWLIB_CONFIGURE_OPTIONS[@]}"
+ )
+ 
+ # Rebuild the original order of include paths. This is important
+diff --git a/libs/circle/include/assert.h b/libs/circle/include/assert.h
+index bcb5db7..21120af 100644
+--- a/libs/circle/include/assert.h
++++ b/libs/circle/include/assert.h
+@@ -33,7 +33,7 @@ extern "C" {
+ 
+ 	#define assert(expr)	(  likely (expr)	\
+ 				 ? ((void) 0)		\
+-				 : assertion_failed (#expr, __FILE__, __LINE__))
++				 : assertion_failed (#expr, __FILE_NAME__, __LINE__))
+ #endif
+ 
+ #ifndef __cplusplus
+diff --git a/libs/circle-newlib/newlib/libc/include/assert.h b/libs/circle-newlib/newlib/libc/include/assert.h
+index b9e5e9b..4bac53d 100644
+--- a/libs/circle-newlib/newlib/libc/include/assert.h
++++ b/libs/circle-newlib/newlib/libc/include/assert.h
+@@ -13,7 +13,7 @@ extern "C" {
+ #ifdef NDEBUG           /* required by ANSI standard */
+ # define assert(__e) ((void)0)
+ #else
+-# define assert(__e) ((__e) ? (void)0 : __assert_func (__FILE__, __LINE__, \
++# define assert(__e) ((__e) ? (void)0 : __assert_func (__FILE_NAME__, __LINE__, \
+ 						       __ASSERT_FUNC, #__e))
+ 
+ # ifndef __ASSERT_FUNC
+diff --git a/libs/circle-newlib/newlib/libc/include/sys/reent.h b/libs/circle-newlib/newlib/libc/include/sys/reent.h
+index 0cba166..05cc7e3 100644
+--- a/libs/circle-newlib/newlib/libc/include/sys/reent.h
++++ b/libs/circle-newlib/newlib/libc/include/sys/reent.h
+@@ -460,7 +460,7 @@ struct _reent
+ /* Specify how to handle reent_check malloc failures. */
+ #ifdef _REENT_CHECK_VERIFY
+ #include <assert.h>
+-#define __reent_assert(x) ((x) ? (void)0 : __assert_func(__FILE__, __LINE__, (char *)0, "REENT malloc succeeded"))
++#define __reent_assert(x) ((x) ? (void)0 : __assert_func(__FILE_NAME__, __LINE__, (char *)0, "REENT malloc succeeded"))
+ #else
+ #define __reent_assert(x) ((void)0)
+ #endif
+diff --git a/libs/circle-newlib/newlib/libc/stdlib/mprec.h b/libs/circle-newlib/newlib/libc/stdlib/mprec.h
+index 83de932..423dd73 100644
+--- a/libs/circle-newlib/newlib/libc/stdlib/mprec.h
++++ b/libs/circle-newlib/newlib/libc/stdlib/mprec.h
+@@ -341,12 +341,16 @@ typedef struct _Bigint _Bigint;
+ #define copybits 	__copybits
+ #define hexnan	__hexnan
+ 
++#ifdef NDEBUG
++#define eBalloc(__reent_ptr, __len) Balloc(__reent_ptr, __len)
++#else
+ #define eBalloc(__reent_ptr, __len) ({ \
+    void *__ptr = Balloc(__reent_ptr, __len); \
+    if (__ptr == NULL) \
+-     __assert_func(__FILE__, __LINE__, (char *)0, "Balloc succeeded"); \
++     __assert_func(__FILE_NAME__, __LINE__, (char *)0, "Balloc succeeded"); \
+    __ptr; \
+    })
++#endif
+    
+ #if !defined(PREFER_SIZE_OVER_SPEED) && !defined(__OPTIMIZE_SIZE__) && !defined(_SMALL_HEXDIG)
+ #define __get_hexdig(x) __hexdig[x] /* NOTE: must evaluate arg only once */

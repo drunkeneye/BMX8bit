@@ -1,0 +1,17 @@
+TCPSER license notice
+=====================
+
+Source: https://github.com/go4retro/tcpser
+
+The upstream README states:
+
+  TCPSER is distributed under the GPL 2.0 or later
+
+The BMX tree imports a small TCPSER modem-core subset and replaces the original
+POSIX serial/TCP I/O layer with the BMX bare-metal adapter. The imported subset
+is therefore used under GPL-2.0-or-later.
+
+The full GNU General Public License version 2 text is available in the BMX
+source tree at:
+
+  third_party/vice-3.10/COPYING
