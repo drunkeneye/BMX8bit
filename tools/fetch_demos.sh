@@ -1,6 +1,7 @@
 #!/bin/bash
 # Fetch the Atari 8-bit demos/intros collection and extract it into a
-# staged SD tree at disks/atari800/demos.
+# staged SD tree at disks/ATARI800/demos (uppercase: FAT32 volume, and the
+# rest of the tree uses uppercase machine dirs).
 #
 # Best effort by design: missing 7z, offline hosts, or a bad archive all
 # skip quietly (one note line) without failing the build. Run it again
@@ -20,7 +21,14 @@ ARCHIVE_URL="http://ftp.pigwa.net/stuff/collections/atari_8bit_demos_and_intros/
 ARCHIVE_NAME="atari_8bit_demos_and_intros_[2014-10-30].7z"
 CACHE_DIR="$SRC_DIR/downloads"
 CACHE_FILE="$CACHE_DIR/$ARCHIVE_NAME"
-DEST="$STAGE_DIR/disks/atari800/demos"
+DEST="$STAGE_DIR/disks/ATARI800/demos"
+
+# One-time migration from the lowercase path used by early revisions.
+LOWER="$STAGE_DIR/disks/atari800/demos"
+if [ ! -d "$DEST" ] && [ -d "$LOWER" ] && [ -n "$(ls -A "$LOWER" 2>/dev/null)" ]; then
+  mkdir -p "$STAGE_DIR/disks/ATARI800"
+  mv "$LOWER" "$DEST" && rmdir "$STAGE_DIR/disks/atari800" 2>/dev/null
+fi
 
 if [ -d "$DEST" ] && [ -n "$(ls -A "$DEST" 2>/dev/null)" ]; then
   echo "fetch_demos: $DEST already populated, skipping"

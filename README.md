@@ -59,6 +59,10 @@ tools/pi4/build_pi4.sh
 which fetches the ARM toolchain, all missing ROMs, then stages a
 bootable tree (default `pi4-test/sdcard`).
 
+It will also download intros and demos from ftp.pigwa.net and place
+it into the disks folders, just that you have some cool stuff to start with.
+
+
 ## Credits
 
 - BMX / BMC64 and all third parties listed in
