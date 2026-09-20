@@ -8,6 +8,7 @@ STAGE_ARGS=()
 BUILD_PROFILE="${BMC64_BUILD_PROFILE:-release}"
 BUILD_ONLY=0
 STAGE_DIR_SET=0
+STAGE_DIR_OVERRIDE=""
 BUILD_MACHINES=()
 BUILD_JOBS="${BMX_BUILD_JOBS:-$(nproc)}"
 GENERATE_LISTING="${BMX_GENERATE_LISTING:-0}"
@@ -110,6 +111,7 @@ while (($# > 0)); do
       fi
       STAGE_ARGS+=("--stage-dir" "$2")
       STAGE_DIR_SET=1
+      STAGE_DIR_OVERRIDE="$2"
       shift 2
       ;;
     --cmdline-option)
@@ -174,6 +176,13 @@ if [ "${#BUILD_MACHINES[@]}" -gt 0 ]; then
   done
   BMX_PI5_MACHINES=("${BUILD_MACHINES[@]}")
 fi
+# Build-identity stamps (About label via BMX_BUILD_STAMP, debug log tag via
+# __DATE__/__TIME__) live in menu.c and atari800_debug.cpp. make only
+# rebuilds changed sources, so without this the stamps freeze at whatever
+# build last touched those files and misidentify the kernel. Touching them
+# recompiles exactly two TUs per variant.
+touch "$SRC_DIR/third_party/common/menu.c" \
+      "$SRC_DIR/src/atari800/atari800_debug.cpp"
 build_vice310_machines "${BMX_PI5_MACHINES[@]}"
 if [ "$BUILD_ONLY" -eq 0 ]; then
   if [ "$DOWNLOAD_ROMS" -eq 1 ]; then
@@ -183,4 +192,6 @@ if [ "$BUILD_ONLY" -eq 0 ]; then
   fi
   "$SRC_DIR/tools/pi5/stage_pi5_sd.sh" \
     --kernel-dir "$BMX_VARIANT_ROOT/images" "${STAGE_ARGS[@]}"
+  "$SRC_DIR/tools/fetch_demos.sh" \
+    "${STAGE_DIR_OVERRIDE:-$SRC_DIR/pi5-test/sdcard}"
 fi

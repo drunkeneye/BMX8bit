@@ -59,4 +59,6 @@ third_party/source-cache/*.tar.gz
 # holds build-critical ROM *sources* and must stay tracked.
 # Manually provisioned exceptions can be force-added.
 /roms/
+# Demo collection archive cache (tools/fetch_demos.sh).
+/downloads/
 third_party/vice-3.10/data/*/*.bin

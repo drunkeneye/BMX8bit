@@ -8,6 +8,7 @@ STAGE_ARGS=()
 BUILD_PROFILE="${BMC64_BUILD_PROFILE:-release}"
 BUILD_ONLY=0
 STAGE_DIR_SET=0
+STAGE_DIR_OVERRIDE=""
 BUILD_MACHINES=()
 BUILD_JOBS="${BMX_BUILD_JOBS:-$(nproc)}"
 GENERATE_LISTING="${BMX_GENERATE_LISTING:-0}"
@@ -130,6 +131,7 @@ while (($# > 0)); do
       fi
       STAGE_ARGS+=("--stage-dir" "$2")
       STAGE_DIR_SET=1
+      STAGE_DIR_OVERRIDE="$2"
       shift 2
       ;;
     -h|--help)
@@ -213,4 +215,6 @@ if [ "$BUILD_ONLY" -eq 0 ]; then
   fi
   "$SRC_DIR/tools/pi4/stage_pi4_sd.sh" \
     --kernel-dir "$BMX_VARIANT_ROOT/images" "${STAGE_ARGS[@]}"
+  "$SRC_DIR/tools/fetch_demos.sh" \
+    "${STAGE_DIR_OVERRIDE:-$SRC_DIR/pi4-test/sdcard}"
 fi

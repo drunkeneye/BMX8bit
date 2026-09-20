@@ -565,7 +565,7 @@ vice310_machine_config() {
     c64)
       VICE310_TARGET=x64; VICE310_MAKEFILE=mk/machines/Makefile-C64-310
       VICE310_CLASS=RASPI_C64; VICE310_ARCH_DIR=c64; VICE310_ARCH_LIB=libarch_c64.a
-      VICE310_IMAGE_SUFFIX=c64; VICE310_COPY_DEFAULT=1 ;;
+      VICE310_IMAGE_SUFFIX=c64; VICE310_COPY_DEFAULT=0 ;;
     c64sc)
       VICE310_TARGET=x64sc; VICE310_MAKEFILE=mk/machines/Makefile-C64SC-310
       VICE310_CLASS=RASPI_C64SC; VICE310_ARCH_DIR=c64; VICE310_ARCH_LIB=libarch_c64.a
@@ -595,7 +595,7 @@ vice310_machine_config() {
       # Makefile; there is no VICE target or arch archive to build or link.
       VICE310_TARGET=; VICE310_MAKEFILE=mk/machines/Makefile-ATARI800-310
       VICE310_CLASS=RASPI_ATARI800; VICE310_ARCH_DIR=; VICE310_ARCH_LIB=
-      VICE310_IMAGE_SUFFIX=atari800; VICE310_COPY_DEFAULT=0 ;;
+      VICE310_IMAGE_SUFFIX=atari800; VICE310_COPY_DEFAULT=1 ;;
     *) echo "unsupported VICE 3.10 machine: $machine" >&2; return 1 ;;
   esac
 }

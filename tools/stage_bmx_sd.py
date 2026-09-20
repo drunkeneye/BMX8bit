@@ -164,9 +164,9 @@ def load_kernel_contract(context: StageContext) -> KernelContract:
         base, machine = target.rsplit(".", 1)
         bases.add(base)
         machines.append(machine)
-    if len(bases) != 1 or "c64" not in machines:
+    if len(bases) != 1 or "atari800" not in machines:
         raise StageError(
-            f"{context.board} SD layout kernels must share one base and include c64"
+            f"{context.board} SD layout kernels must share one base and include atari800"
         )
     return KernelContract(next(iter(bases)), tuple(machines))
 
@@ -227,19 +227,19 @@ def validate_kernel_inputs(context: StageContext, contract: KernelContract) -> N
 
     base = contract.base
     fallback = context.kernel_dir / base
-    c64 = context.kernel_dir / f"{base}.c64"
+    default = context.kernel_dir / f"{base}.atari800"
     _require_regular(fallback, f"{context.board} fallback kernel")
-    _require_regular(c64, f"{context.board} C64 kernel")
+    _require_regular(default, f"{context.board} Atari800 kernel")
     try:
         fallback_bytes = fallback.read_bytes()
-        c64_bytes = c64.read_bytes()
+        default_bytes = default.read_bytes()
     except OSError as exc:
         raise StageError(f"cannot read kernel inputs in {context.kernel_dir}") from exc
-    if not c64_bytes:
-        raise StageError(f"C64 kernel is empty: {c64}")
-    if fallback_bytes != c64_bytes:
+    if not default_bytes:
+        raise StageError(f"Atari800 kernel is empty: {default}")
+    if fallback_bytes != default_bytes:
         raise StageError(
-            f"fallback kernel must be byte-identical to the C64 kernel: {fallback}"
+            f"fallback kernel must be byte-identical to the Atari800 kernel: {fallback}"
         )
     for machine in contract.machines:
         _require_regular(
@@ -324,7 +324,7 @@ def render_config_and_cmdline(
 ) -> None:
     config = _read_ascii(REPO_ROOT / "sdcard/config.txt", "base config.txt")
     cmdline = _read_ascii(REPO_ROOT / "sdcard/cmdline.txt", "base cmdline.txt")
-    kernel_name = f"{contract.base}.c64"
+    kernel_name = f"{contract.base}.atari800"
 
     if context.board == "pi4":
         config = _insert_managed_lines(
