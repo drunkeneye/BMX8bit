@@ -54,7 +54,9 @@ third_party/circle-stdlib-pi4/
 third_party/circle-stdlib-pi5/
 third_party/source-cache/*.tar.gz
 !third_party/source-cache/*.tar.gz.part-*
-# Firmware ROMs are fetched by tools/download_roms.py (see BUILDING.md),
-# never committed. Manually provisioned exceptions can be force-added.
-roms/
+# Firmware ROM download cache (tools/download_roms.py, see BUILDING.md),
+# never committed. Root-anchored on purpose: third_party/*/src/roms
+# holds build-critical ROM *sources* and must stay tracked.
+# Manually provisioned exceptions can be force-added.
+/roms/
 third_party/vice-3.10/data/*/*.bin
