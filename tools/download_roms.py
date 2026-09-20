@@ -23,7 +23,9 @@ import html.parser
 import json
 import os
 import re
+import socket
 import sys
+import time
 import urllib.parse
 import urllib.request
 
@@ -164,8 +166,44 @@ ASSEMBLIES = {
 
 
 def fetch(url, timeout=60):
+    """GET with retries for transient network/DNS blips (home-router DNS
+    forwarders hand out EAI_AGAIN under load; the Pi here resolves via one).
+    Retries URLError/timeout only; HTTP errors (404 etc.) fail at once."""
     req = urllib.request.Request(url, headers=UA)
-    return urllib.request.urlopen(req, timeout=timeout)
+    last = None
+    for attempt, wait in ((1, 0), (2, 2), (3, 5)):
+        if wait:
+            time.sleep(wait)
+        try:
+            return urllib.request.urlopen(req, timeout=timeout)
+        except urllib.error.HTTPError:
+            raise
+        except Exception as e:
+            last = e
+            print("  net try %d %s (%s)" % (attempt, url.split("?")[0], e))
+    raise last
+
+
+def dns_preflight():
+    """Resolve both ROM hosts up front. Returns True if usable; prints a
+    pinpointed diagnostic otherwise (this is what an offline run looks
+    like, instead of 40 identical tracebacks)."""
+    old_timeout = socket.getdefaulttimeout()
+    socket.setdefaulttimeout(10)
+    try:
+        ok = True
+        for host in ("www.zimmers.net", "api.github.com"):
+            try:
+                socket.getaddrinfo(host, 443)
+                print("  dns ok: %s" % host)
+            except Exception as e:
+                print("  DNS FAIL: %s (%s)" % (host, e))
+                print("    check link (/etc/resolv.conf, router, WiFi)"
+                      " and retry")
+                ok = False
+        return ok
+    finally:
+        socket.setdefaulttimeout(old_timeout)
 
 
 def norm(name):
@@ -389,7 +427,6 @@ def fetch_vice(index):
                 failed.append(name)
             continue
         if index is None:
-            print("  NO-INDEX %s" % name)
             failed.append(name)
             continue
         print("  get %s" % name)
@@ -456,14 +493,26 @@ def main():
     do_vice = not only or "vice" in only or "c64" in only
     do_atari = not only or "atari" in only or "a800" in only
 
+    # Staging copies repo/roms/a800 1:1 (both.tree requires the source to
+    # exist, even when empty), so the cache dirs always exist afterwards
+    # — even fully offline, when there is nothing to put in them yet.
+    for cache_dir, _, _ in VICE_ROMS:
+        os.makedirs(os.path.join(CACHE, cache_dir), exist_ok=True)
+    os.makedirs(os.path.join(CACHE, "a800"), exist_ok=True)
+
     total_failed = []
+    net_ok = dns_preflight()
     if do_vice:
         print("VICE ROMs (zimmers.net, scpu64 binary excluded):")
-        try:
-            index = crawl_zimmers()
-            print("  index: %d files" % len(index))
-        except Exception as e:
-            print("  index failed (%s); downloads will fail" % e)
+        if net_ok:
+            try:
+                index = crawl_zimmers()
+                print("  index: %d files" % len(index))
+            except Exception as e:
+                print("  index failed (%s); only local files apply" % e)
+                index = None
+        else:
+            print("  offline; only local files apply")
             index = None
         got, skipped, failed = fetch_vice(index)
         print("  vice: %d fetched, %d present, %d failed" %
@@ -471,9 +520,12 @@ def main():
         total_failed += ["vice:" + n for n in failed]
     if do_atari:
         print("Atari ROMs (FW-Altirra Automatic/):")
-        files = fw_file_list()
+        files = fw_file_list() if net_ok else None
         if files is None:
-            print("  atari: list unavailable, skipping")
+            if net_ok:
+                print("  atari: list unavailable, skipping")
+            else:
+                print("  atari: offline, skipping")
         else:
             got, skipped, failed = fetch_atari(files)
             print("  atari: %d fetched, %d present, %d failed" %
